@@ -35,8 +35,9 @@ export default function KPIsPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Management Analytics</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Hotel KPIs calculated from real database records</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Reports</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Hotel numbers</h1>
+          <p className="text-sm text-ink-500 mt-1">How full the house is, average room price, and money by department.</p>
         </div>
         <div className="flex gap-1">
           {['today','week','month'].map((p) => (
@@ -48,20 +49,23 @@ export default function KPIsPage() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Occupancy %" value={`${Number(kpis.occupancyPercent).toFixed(1)}%`} icon={Percent} color="brand" />
-        <Stat label="ADR · Avg Daily Rate" value={naira(kpis.averageDailyRate)} icon={BedDouble} color="blue" />
-        <Stat label="RevPAR" value={naira(kpis.revpar)} icon={TrendingUp} color="violet" />
-        <Stat label="Avg Length of Stay" value={`${Number(kpis.averageLengthOfStay).toFixed(1)} nights`} icon={CalendarRange} color="green" />
+        <Stat label="Rooms filled" value={`${Number(kpis.occupancyPercent).toFixed(1)}%`} icon={Percent} color="brand" />
+        <Stat label="Avg room price" value={naira(kpis.averageDailyRate)} icon={BedDouble} color="blue" />
+        <Stat label="Per available room" value={naira(kpis.revpar)} icon={TrendingUp} color="violet" />
+        <Stat label="Avg nights stayed" value={`${Number(kpis.averageLengthOfStay).toFixed(1)} nights`} icon={CalendarRange} color="green" />
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Room Revenue" value={naira(kpis.roomRevenue)} icon={DollarSign} color="green" />
-        <Stat label="Cancellation Rate" value={`${Number(kpis.cancellationRate).toFixed(1)}%`} icon={XCircle} color="amber" />
-        <Stat label="No-show Rate" value={`${Number(kpis.noShowRate).toFixed(1)}%`} icon={UserX} color="red" />
-        <Stat label="Sold Room-Nights" value={kpis.soldNights} icon={BedDouble} color="blue" />
+        <Stat label="Room money" value={naira(kpis.roomRevenue)} icon={DollarSign} color="green" />
+        <Stat label="Cancelled" value={`${Number(kpis.cancellationRate).toFixed(1)}%`} icon={XCircle} color="amber" />
+        <Stat label="No-show" value={`${Number(kpis.noShowRate).toFixed(1)}%`} icon={UserX} color="red" />
+        <Stat label="Nights sold" value={kpis.soldNights} icon={BedDouble} color="blue" />
       </div>
+      <p className="text-xs text-ink-400">
+        Avg room price is what occupied rooms sold for. Per available room is that price times how full the house is.
+      </p>
 
       <Card>
-        <CardHeader title="Department Revenue" subtitle={`${dept.period.from} → ${dept.period.to}`} />
+        <CardHeader title="Money by department" subtitle={`${dept.period.from} → ${dept.period.to}`} />
         <div className="p-5">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="rounded-lg border border-ink-100 p-4">

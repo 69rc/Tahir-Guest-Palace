@@ -14,14 +14,13 @@ export function RestaurantProvider({ children }) {
   const isManager = user?.role_name === 'RESTAURANT_MANAGER';
   const isUnrestricted = !isStaff && !isManager; // admin, GM, manager, etc.
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ silent } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const res = await api.get('/restaurants');
       const list = res.data || [];
       setRestaurants(list);
       if (isStaff) {
-        // Lock staff to their single assigned restaurant (derived from the user record).
         const assigned = list[0];
         setActiveRestaurantId(assigned ? assigned.id : null);
       } else {
@@ -30,7 +29,7 @@ export function RestaurantProvider({ children }) {
     } catch {
       setRestaurants([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [isStaff]);
 
@@ -53,6 +52,7 @@ export function RestaurantProvider({ children }) {
     isStaff,
     isManager,
     isUnrestricted,
+    reload: load,
   };
 
   return <RestaurantContext.Provider value={value}>{children}</RestaurantContext.Provider>;

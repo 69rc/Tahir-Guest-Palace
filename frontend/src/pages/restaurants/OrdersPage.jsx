@@ -1,19 +1,57 @@
-import { useEffect, useState } from 'react';
-import { Receipt, BedDouble } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Printer } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { useRestaurant } from '../../context/RestaurantContext.jsx';
 import RestaurantSelector from '../../components/restaurant/RestaurantSelector.jsx';
-import { Badge, Card, CardHeader, Button, Modal, PageLoader, EmptyState, SearchInput } from '../../components/ui/index.jsx';
+import Receipt from '../../components/restaurant/Receipt.jsx';
+import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, FilterChip, GuestPicker } from '../../components/ui/index.jsx';
 import { naira, fmtDateTime } from '../../utils/format.js';
+import { PERM } from '../../utils/permissions.js';
+
+const PAY = [
+  { id: 'CASH', label: 'Cash' },
+  { id: 'POS', label: 'POS' },
+  { id: 'TRANSFER', label: 'Transfer' },
+  { id: 'CARD', label: 'Card' },
+];
+
+function orderLabel(o) {
+  if (o.is_charged_to_room) return 'On room';
+  if (o.status === 'PAID') return 'Paid';
+  if (o.status === 'CANCELLED') return 'Cancelled';
+  return 'Open';
+}
+
+function orderKind(o) {
+  if (o.is_charged_to_room) return 'room';
+  if (o.status === 'PAID') return 'paid';
+  if (o.status === 'OPEN') return 'open';
+  return 'other';
+}
+
+function paidHow(o) {
+  if (o.is_charged_to_room) return 'Room bill';
+  const m = PAY.find((p) => p.id === o.payment_method);
+  return m?.label || o.payment_method || null;
+}
 
 export default function OrdersPage() {
-  const { activeRestaurantId, loading: restLoading } = useRestaurant();
+  const { canAccess } = useAuth();
+  const { activeRestaurantId, activeRestaurant, loading: restLoading } = useRestaurant();
   const [orders, setOrders] = useState([]);
+  const [occupiedRooms, setOccupiedRooms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('open');
   const [detail, setDetail] = useState(null);
+  const [method, setMethod] = useState('CASH');
+  const [roomId, setRoomId] = useState('');
+  const [working, setWorking] = useState(false);
   const toast = useToast();
+  const canPay = canAccess(PERM.ORDERS_MANAGE);
+  const canCharge = canAccess(PERM.CHARGE_ROOM);
 
   const load = async () => {
     if (!activeRestaurantId) return;
@@ -29,94 +67,176 @@ export default function OrdersPage() {
   };
   useEffect(() => { if (activeRestaurantId) load(); }, [activeRestaurantId]);
 
-  const filtered = orders.filter((o) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (o.order_no || '').toLowerCase().includes(q) || (o.restaurant_name || '').toLowerCase().includes(q) || String(o.table_number || '').includes(q);
-  });
+  useEffect(() => {
+    if (!canCharge) return;
+    api.get('/restaurants/in-house').then((r) => {
+      setOccupiedRooms(r.data || []);
+    }).catch(() => {});
+  }, [canCharge]);
 
   const openDetail = async (o) => {
     try {
       const res = await api.get(`/restaurants/orders/${o.id}`);
       setDetail(res.data);
+      setRoomId('');
+      setMethod('CASH');
     } catch (e) {
       toast.error(e.message);
     }
   };
 
-  const actions = (o) => (
-    <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-      {o.status === 'OPEN' && (
-        <>
-          <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); toast.info('Use POS to charge/pay this order'); }}>
-            <BedDouble size={14} /> Charge
-          </Button>
-        </>
-      )}
-    </div>
-  );
+  const pay = async () => {
+    if (!detail) return;
+    setWorking(true);
+    try {
+      await api.post(`/restaurants/orders/${detail.id}/pay`, { order_id: detail.id, method });
+      toast.success('Paid');
+      const res = await api.get(`/restaurants/orders/${detail.id}`);
+      setDetail(res.data);
+      load();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const charge = async () => {
+    if (!detail || !roomId) return;
+    setWorking(true);
+    try {
+      await api.post(`/restaurants/orders/${detail.id}/charge-to-room`, { order_id: detail.id, room_id: roomId });
+      toast.success('Added to room bill');
+      const res = await api.get(`/restaurants/orders/${detail.id}`);
+      setDetail(res.data);
+      load();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const q = search.trim().toLowerCase();
+  const visible = useMemo(() => orders.filter((o) => {
+    const kind = orderKind(o);
+    if (filter !== 'all' && kind !== filter) return false;
+    if (!q) return true;
+    return [o.order_no, o.restaurant_name, o.table_number, o.guest_name, o.customer_name].some((v) => String(v || '').toLowerCase().includes(q));
+  }), [orders, filter, q]);
+
+  const counts = {
+    open: orders.filter((o) => orderKind(o) === 'open').length,
+    paid: orders.filter((o) => orderKind(o) === 'paid').length,
+    room: orders.filter((o) => orderKind(o) === 'room').length,
+    all: orders.length,
+  };
+
+  const stillOpen = detail && detail.status === 'OPEN' && !detail.is_charged_to_room;
+  const roomGuests = occupiedRooms.map((r) => ({
+    id: r.id,
+    full_name: r.current_guest,
+    phone: `Room ${r.room_number}`,
+  }));
 
   if ((loading && !orders.length) || (restLoading && !activeRestaurantId)) return <PageLoader />;
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Restaurant Orders</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Orders across selected outlet</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Restaurants</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Orders</h1>
+          <p className="text-sm text-ink-500 mt-1">Open tickets, paid bills, and charges on a guest room.</p>
         </div>
-        <RestaurantSelector />
+      </div>
+
+      <RestaurantSelector />
+
+      <div className="space-y-3">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search order, table, or name…" />
+        <div className="flex flex-wrap gap-2">
+          <FilterChip active={filter === 'open'} onClick={() => setFilter('open')} label="Open" count={counts.open} />
+          <FilterChip active={filter === 'paid'} onClick={() => setFilter('paid')} label="Paid" count={counts.paid} />
+          <FilterChip active={filter === 'room'} onClick={() => setFilter('room')} label="On room" count={counts.room} />
+          <FilterChip active={filter === 'all'} onClick={() => setFilter('all')} label="All" count={counts.all} />
+        </div>
       </div>
 
       <Card>
-        <div className="p-4 border-b border-ink-100">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search orders…" className="max-w-sm" />
-        </div>
-        <div className="divide-y divide-ink-100">
-          {filtered.length === 0 ? (
-            <EmptyState title="No orders found" />
-          ) : filtered.map((o) => (
-            <button key={o.id} onClick={() => openDetail(o)} className="w-full flex items-center gap-4 px-5 py-3 hover:bg-ink-50 transition-colors text-left">
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${o.status === 'PAID' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'}`}>
-                <Receipt size={18} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-ink-800">{o.order_no} · {o.restaurant_name}</p>
-                <p className="text-xs text-ink-500">Table {o.table_number || '—'} · {o.guest_name || 'Walk-in'} · {fmtDateTime(o.created_at)}</p>
-              </div>
-              <div className="text-right shrink-0">
+        {visible.length === 0 ? (
+          <EmptyState title={search ? 'Nothing matches' : 'No orders here'} message="New sales from Sell show here." />
+        ) : (
+          <div className="divide-y divide-ink-100">
+            {visible.map((o) => (
+              <button key={o.id} type="button" onClick={() => openDetail(o)} className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-ink-50 text-left">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-ink-800">{o.order_no}</p>
+                  <p className="text-xs text-ink-500">
+                    {o.guest_name || o.customer_name || 'Walk-in'}
+                    {` · ${o.table_number ? `Table ${o.table_number}` : 'Takeaway'}`}
+                    {` · ${fmtDateTime(o.created_at)}`}
+                  </p>
+                </div>
                 <p className="font-bold text-ink-900">{naira(o.total)}</p>
-                <Badge status={o.status}>{o.status}</Badge>
-              </div>
-            </button>
-          ))}
-        </div>
+                <Badge status={o.is_charged_to_room ? 'RESERVED' : o.status}>{orderLabel(o)}</Badge>
+              </button>
+            ))}
+          </div>
+        )}
       </Card>
 
-      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.order_no} wide>
+      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.order_no || 'Order'}>
         {detail && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-ink-500">{detail.restaurant_name} · Table {detail.table_number || '—'}</p>
-                <p className="text-xs text-ink-400">{fmtDateTime(detail.created_at)}</p>
+            <Receipt
+              orderNo={detail.order_no}
+              outlet={detail.restaurant_name || activeRestaurant?.name}
+              customer={detail.guest_name || detail.customer_name}
+              table={detail.table_number}
+              items={detail.items || []}
+              subtotal={detail.subtotal}
+              tax={detail.tax}
+              service={detail.service_charge}
+              discount={detail.discount}
+              total={detail.total}
+              method={paidHow(detail)}
+              status={orderLabel(detail)}
+              date={detail.created_at}
+            />
+
+            {stillOpen && (
+              <div className="space-y-3 border-t border-ink-100 pt-3 print-hide">
+                {canPay && (
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="flex-1 min-w-[8rem]">
+                      <label className="label">How they paid</label>
+                      <select className="input" value={method} onChange={(e) => setMethod(e.target.value)}>
+                        {PAY.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                      </select>
+                    </div>
+                    <Button loading={working} onClick={pay}>Collect {naira(detail.total)}</Button>
+                  </div>
+                )}
+                {canCharge && (
+                  <div className="space-y-2">
+                    <label className="label">Or put on room</label>
+                    <GuestPicker
+                      guests={roomGuests}
+                      value={roomId}
+                      showAllOnEmpty
+                      placeholder="Search name or room…"
+                      onSelect={(g) => setRoomId(g ? String(g.id) : '')}
+                    />
+                    <Button variant="secondary" disabled={!roomId} loading={working} onClick={charge}>Room bill</Button>
+                  </div>
+                )}
               </div>
-              <Badge status={detail.status}>{detail.status}</Badge>
-            </div>
-            <div className="rounded-lg border border-ink-100 divide-y divide-ink-100">
-              {(detail.items || []).map((i) => (
-                <div key={i.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                  <span>{i.item_name} × {i.quantity}</span>
-                  <span className="font-semibold">{naira(i.line_total)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between text-ink-500"><span>Subtotal</span><span>{naira(detail.subtotal)}</span></div>
-              <div className="flex justify-between text-ink-500"><span>Tax</span><span>{naira(detail.tax)}</span></div>
-              <div className="flex justify-between text-ink-500"><span>Service</span><span>{naira(detail.service_charge)}</span></div>
-              <div className="flex justify-between border-t border-ink-100 pt-2 font-bold text-ink-900"><span>Total</span><span>{naira(detail.total)}</span></div>
-            </div>
+            )}
+
+            <Button variant="secondary" className="w-full print-hide" onClick={() => window.print()}>
+              <Printer size={15} /> Print receipt
+            </Button>
           </div>
         )}
       </Modal>

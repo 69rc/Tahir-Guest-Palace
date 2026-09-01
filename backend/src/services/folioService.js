@@ -132,6 +132,58 @@ export async function addInvoiceLine(client, invoiceId, description, amount, qua
   return up.rows[0];
 }
 
+export async function applyGuestPayment(db, {
+  guestId, reservationId, amount, method, note, receivedBy, category = 'ROOM',
+}) {
+  const client = db || pool;
+  let remaining = Number(amount) || 0;
+  if (remaining <= 0) return 0;
+
+  const open = await client.query(
+    `SELECT * FROM invoices
+     WHERE guest_id=$1 AND status IN ('UNPAID','PARTIAL')
+     ORDER BY CASE WHEN reservation_id IS NOT DISTINCT FROM $2 THEN 0 ELSE 1 END, created_at`,
+    [guestId, reservationId || null]
+  );
+  let invoices = open.rows;
+  if (invoices.length === 0) {
+    const created = await client.query(
+      `INSERT INTO invoices (invoice_no, guest_id, reservation_id, invoice_type, subtotal, discount, tax, total, paid, balance, status)
+       VALUES ($1,$2,$3,'HOTEL',0,0,0,0,0,0,'UNPAID') RETURNING *`,
+      [genNumber('INV'), guestId, reservationId || null]
+    );
+    invoices = created.rows;
+  }
+
+  let applied = 0;
+  for (const inv of invoices) {
+    if (remaining <= 0.009) break;
+    const due = Math.max(0, Number(inv.balance));
+    const pay = due > 0.009 ? Math.min(remaining, due) : remaining;
+    if (pay <= 0.009) continue;
+    await client.query(
+      `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note, received_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [genNumber('PAY'), guestId, reservationId || null, inv.id, pay, method || 'CASH', category, note || null, receivedBy || null]
+    );
+    await reconcileInvoice(client, inv.id);
+    remaining -= pay;
+    applied += pay;
+  }
+
+  if (remaining > 0.009) {
+    const inv = invoices[0];
+    await client.query(
+      `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note, received_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [genNumber('PAY'), guestId, reservationId || null, inv.id, remaining, method || 'CASH', category, note || null, receivedBy || null]
+    );
+    await reconcileInvoice(client, inv.id);
+    applied += remaining;
+  }
+  return applied;
+}
+
 // Find or create an open folio invoice for a guest/reservation
 export async function getOrCreateFolioInvoice({ guestId, reservationId }) {
   const existing = await pool.query(

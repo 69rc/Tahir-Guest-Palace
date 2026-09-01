@@ -38,10 +38,11 @@ export default function RevenuePage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Revenue</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Income from room stays and dining</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Finance</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Money in</h1>
+          <p className="text-sm text-ink-500 mt-1">Rooms and restaurants — what came in.</p>
         </div>
         <div className="flex rounded-lg border border-ink-200 overflow-hidden">
           {[['day', 'Daily'], ['week', 'Weekly'], ['month', 'Monthly']].map(([v, l]) => (
@@ -54,14 +55,14 @@ export default function RevenuePage() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-        <Stat label="Total Revenue" value={naira(data.totals.total)} icon={TrendingUp} color="green" />
-        <Stat label="Hotel Revenue" value={naira(data.totals.hotel)} icon={Wallet} color="blue" />
-        <Stat label="Restaurant Revenue" value={naira(data.totals.restaurant)} icon={UtensilsCrossed} color="brand" />
+        <Stat label="All money in" value={naira(data.totals.total)} icon={TrendingUp} color="green" />
+        <Stat label="Rooms" value={naira(data.totals.hotel)} icon={Wallet} color="blue" />
+        <Stat label="Restaurants" value={naira(data.totals.restaurant)} icon={UtensilsCrossed} color="brand" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
-          <CardHeader title="Revenue Over Time" />
+          <CardHeader title="Over time" />
           <div className="p-4 h-72">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={series}>
@@ -88,7 +89,7 @@ export default function RevenuePage() {
         </Card>
 
         <Card>
-          <CardHeader title="Revenue by Category" subtitle="Payment method breakdown" />
+          <CardHeader title="By how they paid" subtitle="Cash, POS, transfer, card" />
           <div className="p-4 h-72 flex items-center justify-center">
             {data.byCategory.length === 0 ? <EmptyState title="No revenue yet" /> : (
               <ResponsiveContainer><PieChart>
@@ -104,7 +105,7 @@ export default function RevenuePage() {
       </div>
 
       <Card>
-        <CardHeader title="Revenue Breakdown" />
+        <CardHeader title="Split" />
         <div className="overflow-x-auto">
           <table className="table-base">
             <thead><tr className="bg-ink-50">

@@ -1,14 +1,17 @@
 import pool from '../config/db.js';
 import { asyncHandler, ApiError } from '../utils/helpers.js';
-import { genNumber, audit } from '../utils/common.js';
+import { genNumber, audit, openShiftId } from '../utils/common.js';
 import { consumeOrderStock } from '../services/stockService.js';
 import { reconcileInvoice } from '../services/folioService.js';
 import { assertRestaurantAccess, resolveRestaurantContext, getAssignedRestaurantIds } from '../utils/restaurantAccess.js';
 
 export const getRestaurants = asyncHandler(async (req, res) => {
   const { restaurantIds: assigned } = await getAssignedRestaurantIds(req.user);
-  let q = `SELECT r.*, (SELECT COUNT(*) FROM restaurant_tables t WHERE t.restaurant_id=r.id) AS tables_count,
-             (SELECT COUNT(*) FROM orders o WHERE o.restaurant_id=r.id AND o.status IN ('OPEN','PAID')) AS active_orders
+  let q = `SELECT r.*,
+             (SELECT COUNT(*) FROM restaurant_tables t WHERE t.restaurant_id=r.id) AS tables_count,
+             (SELECT COUNT(*) FROM restaurant_tables t WHERE t.restaurant_id=r.id AND t.status='AVAILABLE') AS free_tables,
+             (SELECT COUNT(*) FROM restaurant_tables t WHERE t.restaurant_id=r.id AND t.status='OCCUPIED') AS busy_tables,
+             (SELECT COUNT(*) FROM restaurant_tables t WHERE t.restaurant_id=r.id AND t.status='RESERVED') AS reserved_tables
            FROM restaurants r`;
   const params = [];
   if (assigned !== null) {
@@ -21,14 +24,50 @@ export const getRestaurants = asyncHandler(async (req, res) => {
 });
 
 export const createRestaurant = asyncHandler(async (req, res) => {
-  const { name, description, tax_rate, service_charge } = req.body;
+  const { name, description, tax_rate, service_charge, outlet_type } = req.body;
   if (!name) throw new ApiError(400, 'Restaurant name required.');
   const { rows } = await pool.query(
-    `INSERT INTO restaurants (name, description, tax_rate, service_charge) VALUES ($1,$2,$3,$4) RETURNING *`,
-    [name, description, tax_rate || 0, (service_charge ?? 0)]
+    `INSERT INTO restaurants (name, description, tax_rate, service_charge, outlet_type)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [name, description, tax_rate || 0, (service_charge ?? 0), outlet_type || 'RESTAURANT']
   );
   await audit(req.user?.id, 'CREATE_RESTAURANT', 'restaurants', rows[0].id);
   res.status(201).json({ success: true, data: rows[0] });
+});
+
+export const updateRestaurant = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const existing = await pool.query('SELECT * FROM restaurants WHERE id=$1', [id]);
+  if (existing.rows.length === 0) throw new ApiError(404, 'Outlet not found.');
+  await assertRestaurantAccess(req.user, id);
+  const curr = existing.rows[0];
+  const { name, description, tax_rate, service_charge, is_active, outlet_type } = req.body;
+  const nextActive = typeof is_active === 'boolean' ? is_active : curr.is_active;
+  const { rows } = await pool.query(
+    `UPDATE restaurants SET
+       name = COALESCE($2, name),
+       description = COALESCE($3, description),
+       tax_rate = COALESCE($4, tax_rate),
+       service_charge = COALESCE($5, service_charge),
+       is_active = $6,
+       outlet_type = COALESCE($7, outlet_type)
+     WHERE id=$1 RETURNING *`,
+    [id, name ?? null, description ?? null, tax_rate ?? null, service_charge ?? null, nextActive, outlet_type ?? null]
+  );
+  await audit(req.user?.id, 'UPDATE_RESTAURANT', 'restaurants', id);
+  res.json({ success: true, data: rows[0] });
+});
+
+export const getInHouseRooms = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT rm.id, rm.room_number, g.full_name AS current_guest, r.guest_id
+     FROM rooms rm
+     JOIN reservations r ON r.room_id = rm.id AND r.status = 'CHECKED_IN'
+     JOIN guests g ON g.id = r.guest_id
+     WHERE rm.status = 'OCCUPIED'
+     ORDER BY substring(rm.room_number from '^[0-9]+')::int NULLS LAST, rm.room_number`
+  );
+  res.json({ success: true, data: rows });
 });
 
 // ---- Tables ----
@@ -55,6 +94,8 @@ export const createTable = asyncHandler(async (req, res) => {
 
 export const updateTableStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
+  const allowed = ['AVAILABLE', 'OCCUPIED', 'RESERVED'];
+  if (!allowed.includes(status)) throw new ApiError(400, 'Table can be free, seated or reserved.');
   const tbl = await pool.query('SELECT * FROM restaurant_tables WHERE id=$1', [req.params.id]);
   if (tbl.rows.length === 0) throw new ApiError(404, 'Table not found.');
   await assertRestaurantAccess(req.user, tbl.rows[0].restaurant_id);
@@ -96,9 +137,30 @@ export const createMenuItem = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: rows[0] });
 });
 
+export const updateMenuItem = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { name, description, price, cost, is_available, category_id } = req.body;
+  const existing = await pool.query('SELECT * FROM menu_items WHERE id=$1', [id]);
+  if (existing.rows.length === 0) throw new ApiError(404, 'Menu item not found.');
+  await assertRestaurantAccess(req.user, existing.rows[0].restaurant_id);
+  const nextAvail = typeof is_available === 'boolean' ? is_available : existing.rows[0].is_available;
+  const { rows } = await pool.query(
+    `UPDATE menu_items SET
+       name = COALESCE($2, name),
+       description = COALESCE($3, description),
+       price = COALESCE($4, price),
+       cost = COALESCE($5, cost),
+       is_available = $6,
+       category_id = COALESCE($7, category_id)
+     WHERE id=$1 RETURNING *`,
+    [id, name ?? null, description ?? null, price ?? null, cost ?? null, nextAvail, category_id ?? null]
+  );
+  res.json({ success: true, data: rows[0] });
+});
+
 // ---- Orders / POS ----
 export const createOrder = asyncHandler(async (req, res) => {
-  const { table_id, items, discount } = req.body;
+  const { table_id, items, discount, customer_name } = req.body;
   if (!Array.isArray(items) || items.length === 0)
     throw new ApiError(400, 'At least one item is required.');
 
@@ -127,10 +189,11 @@ export const createOrder = asyncHandler(async (req, res) => {
     const service = (subtotal - disc) * Number(rt.service_charge || 0) / 100;
     const total = subtotal - disc + tax + service;
 
+    const walkIn = String(customer_name || '').trim() || null;
     const order = await client.query(
-      `INSERT INTO orders (order_no, restaurant_id, table_id, status, subtotal, discount, tax, service_charge, total, created_by)
-       VALUES ($1,$2,$3,'OPEN',$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [genNumber('ORD'), restaurant_id, table_id || null, subtotal, disc, tax, service, total, req.user?.id]
+      `INSERT INTO orders (order_no, restaurant_id, table_id, status, subtotal, discount, tax, service_charge, total, created_by, customer_name)
+       VALUES ($1,$2,$3,'OPEN',$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [genNumber('ORD'), restaurant_id, table_id || null, subtotal, disc, tax, service, total, req.user?.id, walkIn]
     );
     created = order.rows[0];
 
@@ -162,9 +225,12 @@ export const createOrder = asyncHandler(async (req, res) => {
 
 export const getOrder = asyncHandler(async (req, res) => {
   const order = await pool.query(
-    `SELECT o.*, res.name AS restaurant_name, t.table_number
+    `SELECT o.*, res.name AS restaurant_name, t.table_number,
+            COALESCE(g.full_name, o.customer_name) AS guest_name
      FROM orders o LEFT JOIN restaurants res ON res.id=o.restaurant_id
-     LEFT JOIN restaurant_tables t ON t.id=o.table_id WHERE o.id=$1`, [req.params.id]);
+     LEFT JOIN restaurant_tables t ON t.id=o.table_id
+     LEFT JOIN guests g ON g.id=o.guest_id
+     WHERE o.id=$1`, [req.params.id]);
   if (order.rows.length === 0) throw new ApiError(404, 'Order not found.');
   await assertRestaurantAccess(req.user, order.rows[0].restaurant_id);
   const items = await pool.query(
@@ -175,7 +241,7 @@ export const getOrder = asyncHandler(async (req, res) => {
 export const getOrders = asyncHandler(async (req, res) => {
   const restaurantId = req.params.restaurantId;
   let q = `SELECT o.*, res.name AS restaurant_name, t.table_number,
-                  g.full_name AS guest_name
+                  COALESCE(g.full_name, o.customer_name) AS guest_name
            FROM orders o
            LEFT JOIN restaurants res ON res.id=o.restaurant_id
            LEFT JOIN restaurant_tables t ON t.id=o.table_id
@@ -295,10 +361,11 @@ export const payOrder = asyncHandler(async (req, res) => {
         [inv.rows[0].id, it.item_name, it.quantity, it.unit_price, it.line_total]
       );
     }
+    const shiftId = await openShiftId(req.user?.id, client);
     await client.query(
-      `INSERT INTO payments (payment_no, guest_id, order_id, invoice_id, amount, method, category, note)
-       VALUES ($1,$2,$3,$4,$5,$6,'RESTAURANT','Restaurant order payment')`,
-      [genNumber('PAY'), o.guest_id, o.id, inv.rows[0].id, o.total, method || 'CASH']
+      `INSERT INTO payments (payment_no, guest_id, order_id, invoice_id, amount, method, category, note, received_by, shift_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'RESTAURANT','Restaurant order payment',$7,$8)`,
+      [genNumber('PAY'), o.guest_id, o.id, inv.rows[0].id, o.total, method || 'CASH', req.user?.id, shiftId]
     );
     await client.query(`UPDATE orders SET status='PAID', payment_method=$2 WHERE id=$1`, [order_id, method || 'CASH']);
     await client.query(`UPDATE restaurant_tables SET status='AVAILABLE' WHERE id=$1 AND status='OCCUPIED'`, [o.table_id]);

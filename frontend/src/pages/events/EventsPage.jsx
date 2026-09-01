@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, Plus, DoorOpen, ChefHat, Receipt } from 'lucide-react';
+import { Plus, DoorOpen, ChefHat, Receipt } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Button, Modal, PageLoader, Table, Badge } from '../../components/ui/index.jsx';
+import { Button, Modal, PageLoader, Badge, Card, EmptyState, FilterChip } from '../../components/ui/index.jsx';
 import { naira, fmtDate } from '../../utils/format.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 
@@ -24,6 +24,7 @@ export default function EventsPage() {
   });
   const [svcSelection, setSvcSelection] = useState([]);
   const [payForm, setPayForm] = useState({ amount: 0, method: 'TRANSFER', note: '' });
+  const [filter, setFilter] = useState('open');
   const toast = useToast();
   const { canAccess } = useAuth();
 
@@ -90,47 +91,78 @@ export default function EventsPage() {
     } catch (err) { toast.error(err.message); } finally { setSaving(false); }
   };
 
-  if (loading) return <PageLoader />;
+  const eventLabel = (s) => {
+    if (s === 'COMPLETED') return 'Done';
+    if (s === 'CANCELLED') return 'Cancelled';
+    if (s === 'CONFIRMED') return 'Booked';
+    return s || 'Open';
+  };
 
-  const cols = [
-    { key: 'booking_no', label: 'Booking' },
-    { key: 'customer_name', label: 'Customer', render: (r) => <span className="font-medium text-ink-800">{r.customer_name}</span> },
-    { key: 'organization', label: 'Organization', render: (r) => r.organization || '—' },
-    { key: 'hall_name', label: 'Hall', render: (r) => r.hall_name || '—' },
-    { key: 'event_type', label: 'Type' },
-    { key: 'event_date', label: 'Date', render: (r) => fmtDate(r.event_date) },
-    { key: 'rate', label: 'Rate', align: 'right', render: (r) => naira(r.rate) },
-    { key: 'balance', label: 'Balance', align: 'right', render: (r) => <span className="text-amber-600 font-semibold">{naira(r.balance)}</span> },
-    { key: 'status', label: 'Status', render: (r) => <Badge status={r.status}>{r.status}</Badge> },
-    {
-      key: '_a', label: '', align: 'right',
-      render: (r) => (canPay && Number(r.balance) > 0 ? (
-        <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); openPay(r); }}><Receipt size={14} /> Record Payment</Button>
-      ) : null),
-    },
-  ];
+  const kind = (s) => {
+    if (s === 'CANCELLED') return 'other';
+    if (s === 'COMPLETED') return 'done';
+    return 'open';
+  };
+
+  const counts = {
+    open: bookings.filter((b) => kind(b.status) === 'open').length,
+    done: bookings.filter((b) => kind(b.status) === 'done').length,
+    other: bookings.filter((b) => kind(b.status) === 'other').length,
+    all: bookings.length,
+  };
+  const visible = bookings.filter((b) => filter === 'all' || kind(b.status) === filter);
+
+  if (loading) return <PageLoader />;
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Conference &amp; Events</h1>
-          <p className="text-sm text-ink-500 mt-0.5">{bookings.length} event bookings</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Conference</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Events</h1>
+          <p className="text-sm text-ink-500 mt-1">Hall hire and event bookings — separate from restaurant sales.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link to="/events/halls" className="btn-secondary"><DoorOpen size={16} /> Conference Halls</Link>
-          <Link to="/events/services" className="btn-secondary"><ChefHat size={16} /> Event Services</Link>
-          {canManage && <Button onClick={openBook}><Plus size={16} /> New Booking</Button>}
+          <Link to="/events/halls" className="btn-secondary"><DoorOpen size={16} /> Halls</Link>
+          <Link to="/events/services" className="btn-secondary"><ChefHat size={16} /> Add-ons</Link>
+          {canManage && <Button onClick={openBook}><Plus size={16} /> New booking</Button>}
         </div>
       </div>
 
-      <div>
-        <Table
-          columns={cols}
-          rows={bookings}
-          empty={{ title: 'No event bookings', message: 'Create your first conference / event booking.' }}
-        />
+      <div className="flex flex-wrap gap-2">
+        <FilterChip active={filter === 'open'} onClick={() => setFilter('open')} label="Upcoming" count={counts.open} />
+        <FilterChip active={filter === 'done'} onClick={() => setFilter('done')} label="Done" count={counts.done} />
+        <FilterChip active={filter === 'other'} onClick={() => setFilter('other')} label="Cancelled" count={counts.other} />
+        <FilterChip active={filter === 'all'} onClick={() => setFilter('all')} label="All" count={counts.all} />
       </div>
+
+      {visible.length === 0 ? (
+        <Card><EmptyState title="No events here" message="Book a hall for a conference or celebration." /></Card>
+      ) : (
+        <Card>
+          <div className="divide-y divide-ink-100">
+            {visible.map((r) => (
+              <div key={r.id} className="flex items-center gap-3 px-5 py-3.5">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-ink-800">{r.customer_name}</p>
+                  <p className="text-xs text-ink-500">
+                    {r.hall_name || 'Hall'} · {r.event_type} · {fmtDate(r.event_date)}
+                    {r.organization ? ` · ${r.organization}` : ''}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold text-ink-900">{naira(r.rate)}</p>
+                  {Number(r.balance) > 0 && <p className="text-xs text-amber-600">Due {naira(r.balance)}</p>}
+                </div>
+                <Badge status={r.status}>{eventLabel(r.status)}</Badge>
+                {canPay && Number(r.balance) > 0 && (
+                  <Button size="sm" variant="secondary" onClick={() => openPay(r)}><Receipt size={14} /> Pay</Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Modal open={bookOpen} onClose={() => setBookOpen(false)} title="New Event Booking" wide>
         <form onSubmit={createBooking} className="space-y-4">

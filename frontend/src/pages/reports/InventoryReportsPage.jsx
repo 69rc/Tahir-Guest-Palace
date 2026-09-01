@@ -35,8 +35,9 @@ export default function InventoryReportsPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-ink-900">Inventory Reports</h1>
-        <p className="text-sm text-ink-500 mt-0.5">Stock levels, purchases and movement analysis</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Reports</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Store</h1>
+        <p className="text-sm text-ink-500 mt-1">Stock levels, buys, and what moved in or out.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

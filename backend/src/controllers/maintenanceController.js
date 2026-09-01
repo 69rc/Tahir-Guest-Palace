@@ -71,15 +71,17 @@ export const getMaintenanceTicket = asyncHandler(async (req, res) => {
 export const createMaintenanceTicket = asyncHandler(async (req, res) => {
   const { location, room_id, facility, problem_category, description, priority, estimated_cost } = req.body;
   if (!location || !problem_category || !description) {
-    throw new ApiError(400, 'Location, problem category, and description are required.');
+    throw new ApiError(400, 'Say where it is, what kind of problem, and what is wrong.');
   }
   const ticketPriority = priority && PRIORITIES.includes(priority) ? priority : 'MEDIUM';
   const ticketNo = genNumber('MT');
+  const reporterId = req.user?.id;
+  const facilityVal = room_id ? (facility || 'ROOM') : (facility || 'GENERAL');
 
   const { rows } = await pool.query(
     `INSERT INTO maintenance_tickets (ticket_no, location, room_id, facility, problem_category, description, reported_by, priority, estimated_cost)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-    [ticketNo, location, room_id || null, facility || 'GENERAL', problem_category, description, req.user?.id, ticketPriority, estimated_cost || 0]
+    [ticketNo, location, room_id || null, facilityVal, problem_category, description, reporterId, ticketPriority, estimated_cost || 0]
   );
 
   // If room has critical issue, mark OUT_OF_ORDER
@@ -258,4 +260,27 @@ export const getMaintenanceDashboard = asyncHandler(async (_req, res) => {
       outOfOrderRooms: outOfOrderRooms.rows,
     }
   });
+});
+
+export const getMaintenanceStaff = asyncHandler(async (_req, res) => {
+  const technicians = await pool.query(
+    `SELECT u.id, u.full_name
+     FROM users u
+     WHERE u.role_id IN (SELECT id FROM roles WHERE name IN ('MAINTENANCE_STAFF','MAINTENANCE_SUPERVISOR'))
+       AND COALESCE(u.status, 'ACTIVE') = 'ACTIVE'
+     ORDER BY u.full_name`
+  );
+  const reporters = await pool.query(
+    `SELECT u.id, u.full_name
+     FROM users u
+     JOIN roles r ON r.id = u.role_id
+     WHERE COALESCE(u.status, 'ACTIVE') = 'ACTIVE'
+       AND r.name IN (
+         'RECEPTIONIST','HOUSEKEEPING','HOUSEKEEPING_STAFF','HOUSEKEEPING_SUPERVISOR',
+         'MAINTENANCE_STAFF','MAINTENANCE_SUPERVISOR','MANAGER','GENERAL_MANAGER',
+         'SUPER_ADMIN','ADMIN'
+       )
+     ORDER BY u.full_name`
+  );
+  res.json({ success: true, data: { technicians: technicians.rows, reporters: reporters.rows } });
 });

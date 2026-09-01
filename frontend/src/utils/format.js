@@ -75,6 +75,7 @@ export const STATUS_COLORS = {
   CLEAN: 'green',
   DIRTY: 'gray',
   INSPECTED: 'green',
+  COMPLETED: 'green',
   CASH: 'green',
   POS: 'blue',
   TRANSFER: 'violet',
@@ -101,4 +102,14 @@ export const STATUS_COLORS = {
   ACTIVE: 'green',
   INACTIVE: 'gray',
   SUSPENDED: 'red',
+  BOOKED: 'amber',
 };
+
+export function isFlagOn(v) {
+  return v === true || v === 't' || v === 'true' || v === 1 || v === '1';
+}
+
+export const PAY_LABELS = { CASH: 'Cash', POS: 'POS', TRANSFER: 'Transfer', CARD: 'Card' };
+export function payLabel(m) {
+  return PAY_LABELS[m] || m || '—';
+}

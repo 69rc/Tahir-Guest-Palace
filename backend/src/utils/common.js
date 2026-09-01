@@ -33,6 +33,15 @@ export async function audit(userId, action, entityType, entityId, details, ip, o
   }
 }
 
+export async function openShiftId(userId, db = pool) {
+  if (!userId) return null;
+  const { rows } = await db.query(
+    `SELECT id FROM cashier_shifts WHERE staff_user_id=$1 AND status='OPEN' ORDER BY opened_at DESC LIMIT 1`,
+    [userId]
+  );
+  return rows[0]?.id || null;
+}
+
 export function startOfDay(d = new Date()) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);

@@ -24,6 +24,7 @@ import {
   ReceiptText,
   TrendingUp,
   Calculator,
+  Percent,
   Building2,
   UserCog,
   Settings,
@@ -35,38 +36,25 @@ import {
   CalendarClock,
   CalendarDays,
   Wrench,
-  Search,
-  Bell,
   HandCoins,
   ClipboardList,
-  LineChart,
 } from 'lucide-react';
 import { PERM } from '../../utils/permissions.js';
 
 export const NAV = [
   { type: 'link', to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, perms: [PERM.DASHBOARD] },
-  { type: 'link', to: '/search', label: 'Search', icon: Search, perms: [PERM.GLOBAL_SEARCH] },
-  { type: 'link', to: '/notifications', label: 'Notifications', icon: Bell, perms: [PERM.NOTIFICATIONS_VIEW] },
   {
     type: 'group',
     label: 'Hotel',
     icon: Building2,
     children: [
       { to: '/rooms', label: 'Rooms', icon: BedDouble, perms: [PERM.ROOMS_VIEW] },
-      { to: '/room-types', label: 'Room Types', icon: DoorOpen, perms: [PERM.ROOM_TYPES_MANAGE] },
       { to: '/reservations', label: 'Reservations', icon: CalendarCheck2, perms: [PERM.RESERVATIONS_VIEW] },
-      { to: '/reservations/calendar', label: 'Reservation Calendar', icon: CalendarDays, perms: [PERM.RESERVATIONS_VIEW] },
       { to: '/guests', label: 'Guests', icon: Users, perms: [PERM.GUESTS_VIEW] },
       { to: '/checkin', label: 'Check-in / Check-out', icon: LogIn, perms: [PERM.CHECKIN_VIEW] },
       { to: '/housekeeping', label: 'Housekeeping', icon: Sparkles, perms: [PERM.HOUSEKEEPING_VIEW] },
-    ],
-  },
-  {
-    type: 'group',
-    label: 'Maintenance',
-    icon: Wrench,
-    children: [
-      { to: '/maintenance', label: 'Maintenance Tickets', icon: Wrench, perms: [PERM.MAINTENANCE_VIEW] },
+      { to: '/maintenance', label: 'Maintenance', icon: Wrench, perms: [PERM.MAINTENANCE_VIEW] },
+      { to: '/room-types', label: 'Room Types', icon: DoorOpen, perms: [PERM.ROOM_TYPES_MANAGE] },
     ],
   },
   {
@@ -74,12 +62,12 @@ export const NAV = [
     label: 'Restaurants',
     icon: UtensilsCrossed,
     children: [
-      { to: '/restaurants', label: 'Restaurants', icon: Building2, perms: [PERM.RESTAURANTS_MANAGE] },
+      { to: '/restaurants', label: 'Outlets', icon: Building2, perms: [PERM.RESTAURANTS_MANAGE] },
       { to: '/restaurants/tables', label: 'Tables', icon: Grid2x2, perms: [PERM.TABLES_VIEW] },
       { to: '/restaurants/menu', label: 'Menu', icon: BookOpen, perms: [PERM.MENU_VIEW] },
-      { to: '/restaurants/pos', label: 'POS', icon: ShoppingCart, perms: [PERM.POS_USE] },
+      { to: '/restaurants/pos', label: 'Sell', icon: ShoppingCart, perms: [PERM.POS_USE] },
       { to: '/restaurants/orders', label: 'Orders', icon: Receipt, perms: [PERM.ORDERS_VIEW] },
-      { to: '/restaurants/reports', label: 'Restaurant Reports', icon: BarChart3, perms: [PERM.RESTAURANT_REPORTS_VIEW] },
+      { to: '/restaurants/reports', label: 'Reports', icon: BarChart3, perms: [PERM.RESTAURANT_REPORTS_VIEW] },
     ],
   },
   {
@@ -107,20 +95,20 @@ export const NAV = [
     icon: Package,
     children: [
       { to: '/inventory', label: 'Products', icon: Package, perms: [PERM.INVENTORY_VIEW] },
-      { to: '/inventory/categories', label: 'Categories', icon: Tags, perms: [PERM.CATEGORIES_VIEW] },
+      { to: '/inventory/categories', label: 'Kinds', icon: Tags, perms: [PERM.CATEGORIES_VIEW] },
       { to: '/inventory/suppliers', label: 'Suppliers', icon: Truck, perms: [PERM.SUPPLIERS_VIEW] },
       { to: '/inventory/purchases', label: 'Purchases', icon: ShoppingBag, perms: [PERM.PURCHASES_VIEW] },
-      { to: '/inventory/movements', label: 'Stock Movement', icon: ArrowLeftRight, perms: [PERM.INVENTORY_VIEW] },
-      { to: '/inventory/low-stock', label: 'Low Stock', icon: AlertTriangle, perms: [PERM.LOW_STOCK_VIEW] },
-      { to: '/purchase-requests', label: 'Purchase Requests', icon: ClipboardList, perms: [PERM.PURCHASE_REQUESTS_VIEW] },
+      { to: '/inventory/movements', label: 'Stock in and out', icon: ArrowLeftRight, perms: [PERM.INVENTORY_VIEW] },
+      { to: '/inventory/low-stock', label: 'Needs restock', icon: AlertTriangle, perms: [PERM.LOW_STOCK_VIEW] },
+      { to: '/purchase-requests', label: 'Ask to buy', icon: ClipboardList, perms: [PERM.PURCHASE_REQUESTS_VIEW] },
     ],
   },
   {
     type: 'group',
-    label: 'Cashier & Shifts',
+    label: 'Cashier',
     icon: HandCoins,
     children: [
-      { to: '/shifts', label: 'Cashier Shifts', icon: HandCoins, perms: [PERM.SHIFTS_VIEW] },
+      { to: '/shifts', label: 'Shifts', icon: HandCoins, perms: [PERM.SHIFTS_VIEW] },
     ],
   },
   {
@@ -129,18 +117,10 @@ export const NAV = [
     icon: Wallet,
     children: [
       { to: '/finance/payments', label: 'Payments', icon: Wallet, perms: [PERM.PAYMENTS_VIEW] },
-      { to: '/finance/invoices', label: 'Invoices', icon: FileText, perms: [PERM.INVOICES_VIEW] },
-      { to: '/finance/expenses', label: 'Expenses', icon: ReceiptText, perms: [PERM.EXPENSES_VIEW] },
-      { to: '/finance/revenue', label: 'Revenue', icon: TrendingUp, perms: [PERM.REVENUE_VIEW] },
-      { to: '/finance/accounting', label: 'Accounting Reports', icon: Calculator, perms: [PERM.ACCOUNTING_VIEW] },
-    ],
-  },
-  {
-    type: 'group',
-    label: 'Analytics',
-    icon: LineChart,
-    children: [
-      { to: '/reports/kpis', label: 'KPIs', icon: LineChart, perms: [PERM.KPIS_VIEW] },
+      { to: '/finance/invoices', label: 'Bills', icon: FileText, perms: [PERM.INVOICES_VIEW] },
+      { to: '/finance/expenses', label: 'Money out', icon: ReceiptText, perms: [PERM.EXPENSES_VIEW] },
+      { to: '/finance/revenue', label: 'Money in', icon: TrendingUp, perms: [PERM.REVENUE_VIEW] },
+      { to: '/finance/accounting', label: 'Books', icon: Calculator, perms: [PERM.ACCOUNTING_VIEW] },
     ],
   },
   {
@@ -148,13 +128,14 @@ export const NAV = [
     label: 'Reports',
     icon: BarChart3,
     children: [
-      { to: '/reports/hotel', label: 'Hotel Reports', icon: BarChart3, perms: [PERM.HOTEL_REPORTS_VIEW] },
-      { to: '/reports/inventory', label: 'Inventory Reports', icon: Package, perms: [PERM.INVENTORY_REPORTS_VIEW] },
-      { to: '/reports/financial', label: 'Financial Reports', icon: Calculator, perms: [PERM.FINANCIAL_REPORTS_VIEW] },
-      { to: '/reports/amenities', label: 'Amenities Reports', icon: Sparkles, perms: [PERM.SERVICE_REPORTS_VIEW] },
-      { to: '/reports/events', label: 'Events Reports', icon: CalendarDays, perms: [PERM.EVENT_REPORTS_VIEW] },
-      { to: '/reports/outlets', label: 'Outlet Reports', icon: UtensilsCrossed, perms: [PERM.RESTAURANT_REPORTS_VIEW] },
-      { to: '/reports/combined', label: 'Combined Report', icon: Calculator, perms: [PERM.FINANCIAL_REPORTS_VIEW] },
+      { to: '/reports/kpis', label: 'Hotel numbers', icon: Percent, perms: [PERM.KPIS_VIEW] },
+      { to: '/reports/hotel', label: 'Hotel', icon: BarChart3, perms: [PERM.HOTEL_REPORTS_VIEW] },
+      { to: '/reports/inventory', label: 'Store', icon: Package, perms: [PERM.INVENTORY_REPORTS_VIEW] },
+      { to: '/reports/financial', label: 'Money', icon: Calculator, perms: [PERM.FINANCIAL_REPORTS_VIEW] },
+      { to: '/reports/amenities', label: 'Amenities', icon: Sparkles, perms: [PERM.SERVICE_REPORTS_VIEW] },
+      { to: '/reports/events', label: 'Events', icon: CalendarDays, perms: [PERM.EVENT_REPORTS_VIEW] },
+      { to: '/reports/outlets', label: 'Outlets', icon: UtensilsCrossed, perms: [PERM.RESTAURANT_REPORTS_VIEW] },
+      { to: '/reports/combined', label: 'All together', icon: Calculator, perms: [PERM.FINANCIAL_REPORTS_VIEW] },
     ],
   },
   {

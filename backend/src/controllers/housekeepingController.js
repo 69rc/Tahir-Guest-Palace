@@ -50,10 +50,14 @@ export const getHousekeepingStatus = asyncHandler(async (_req, res) => {
             u.full_name AS assigned_name
      FROM rooms rm
      LEFT JOIN room_types rt ON rt.id = rm.room_type_id
-     LEFT JOIN housekeeping_tasks h ON h.room_id = rm.id
+     LEFT JOIN LATERAL (
+       SELECT h2.task_status, h2.priority, h2.due_time, h2.id, h2.assigned_to
+       FROM housekeeping_tasks h2
+       WHERE h2.room_id = rm.id
+       ORDER BY h2.id DESC
+       LIMIT 1
+     ) h ON TRUE
      LEFT JOIN users u ON u.id = h.assigned_to
-     WHERE h.id = (SELECT MAX(h2.id) FROM housekeeping_tasks h2 WHERE h2.room_id = rm.id)
-        OR h.id IS NULL
      ORDER BY substring(rm.room_number from '^[0-9]+')::int NULLS LAST, rm.room_number`);
   res.json({ success: true, data: rows });
 });
@@ -81,19 +85,37 @@ export const getHousekeepingDashboard = asyncHandler(async (_req, res) => {
        COUNT(*) AS total
      FROM users u
      LEFT JOIN housekeeping_tasks h ON h.assigned_to = u.id
-     WHERE u.role_id IN (SELECT id FROM roles WHERE name = 'HOUSEKEEPING')
+     WHERE u.role_id IN (SELECT id FROM roles WHERE name IN ('HOUSEKEEPING','HOUSEKEEPING_STAFF','HOUSEKEEPING_SUPERVISOR'))
+       AND COALESCE(u.status, 'ACTIVE') = 'ACTIVE'
      GROUP BY u.id, u.full_name ORDER BY active DESC`
   );
 
   const needsCleaning = await pool.query(
-    `SELECT h.*, rm.room_number, rt.name AS room_type, u.full_name AS assigned_name
+    `SELECT * FROM (
+       SELECT DISTINCT ON (h.room_id) h.*, rm.room_number, rt.name AS room_type, u.full_name AS assigned_name
+       FROM housekeeping_tasks h
+       JOIN rooms rm ON rm.id = h.room_id
+       LEFT JOIN room_types rt ON rt.id = rm.room_type_id
+       LEFT JOIN users u ON u.id = h.assigned_to
+       WHERE h.task_status IN ('PENDING','ASSIGNED','IN_PROGRESS')
+       ORDER BY h.room_id,
+                CASE h.task_status WHEN 'IN_PROGRESS' THEN 1 WHEN 'ASSIGNED' THEN 2 WHEN 'PENDING' THEN 3 ELSE 4 END,
+                h.id DESC
+     ) t
+     ORDER BY CASE t.priority WHEN 'URGENT' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,
+              CASE t.task_status WHEN 'PENDING' THEN 1 WHEN 'ASSIGNED' THEN 2 WHEN 'IN_PROGRESS' THEN 3 ELSE 4 END,
+              t.created_at
+     LIMIT 40`
+  );
+
+  const readyToInspect = await pool.query(
+    `SELECT DISTINCT ON (h.room_id) h.*, rm.room_number, rt.name AS room_type, u.full_name AS assigned_name
      FROM housekeeping_tasks h
      JOIN rooms rm ON rm.id = h.room_id
      LEFT JOIN room_types rt ON rt.id = rm.room_type_id
      LEFT JOIN users u ON u.id = h.assigned_to
-     WHERE h.task_status IN ('PENDING','ASSIGNED')
-     ORDER BY CASE h.priority WHEN 'URGENT' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END, h.created_at
-     LIMIT 20`
+     WHERE h.task_status = 'COMPLETED'
+     ORDER BY h.room_id, h.id DESC`
   );
 
   const overdueTasks = await pool.query(
@@ -113,6 +135,7 @@ export const getHousekeepingDashboard = asyncHandler(async (_req, res) => {
       roomStatus: roomStatus.rows,
       staffWorkload: staffWorkload.rows,
       needsCleaning: needsCleaning.rows,
+      readyToInspect: readyToInspect.rows,
       overdueTasks: overdueTasks.rows,
     }
   });
@@ -128,15 +151,28 @@ export const createHousekeepingTask = asyncHandler(async (req, res) => {
   const taskPriority = (priority && PRIORITIES.includes(priority)) ? priority : 'MEDIUM';
   const taskStatus = assigned_to ? 'ASSIGNED' : 'PENDING';
 
+  await pool.query(
+    `UPDATE housekeeping_tasks SET task_status='INSPECTED', status='INSPECTED', completed_at=COALESCE(completed_at, now())
+     WHERE room_id=$1 AND task_status IN ('PENDING','ASSIGNED','COMPLETED')`,
+    [room_id]
+  );
+
   const { rows } = await pool.query(
     `INSERT INTO housekeeping_tasks (room_id, status, task_status, priority, assigned_to, reported_by, note, due_time)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
     [room_id, status, taskStatus, taskPriority, assigned_to || null, req.user?.id, note || null, due_time || null]
   );
 
-  // Update room status if needed (only from non-occupied/reserved)
-  if (['DIRTY', 'MAINTENANCE', 'OUT_OF_ORDER'].includes(status)) {
-    await pool.query(`UPDATE rooms SET status=$2 WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED')`, [room_id, status]);
+  if (status === 'DIRTY') {
+    await pool.query(
+      `UPDATE rooms SET status='CLEANING' WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED','MAINTENANCE')`,
+      [room_id]
+    );
+  } else if (['MAINTENANCE', 'OUT_OF_ORDER'].includes(status)) {
+    await pool.query(
+      `UPDATE rooms SET status=$2 WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED')`,
+      [room_id, status]
+    );
   }
 
   await audit(req.user?.id, 'HOUSEKEEPING_CREATE', 'housekeeping_tasks', rows[0].id, { room_id, status, priority: taskPriority });
@@ -177,15 +213,23 @@ export const updateHousekeepingTask = asyncHandler(async (req, res) => {
      newNote, newDueTime, startedAt, completedAt, newInspNotes, inspectedBy]
   );
 
-  // Reflect room status
-  if (newTaskStatus === 'COMPLETED' || newStatus === 'CLEAN') {
-    await pool.query(`UPDATE rooms SET status='CLEAN' WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED')`, [task.room_id]);
+  if (['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED'].includes(newTaskStatus) || newStatus === 'DIRTY') {
+    await pool.query(
+      `UPDATE rooms SET status='CLEANING' WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED','MAINTENANCE')`,
+      [task.room_id]
+    );
   }
   if (newTaskStatus === 'INSPECTED' || newStatus === 'INSPECTED') {
-    await pool.query(`UPDATE rooms SET status='AVAILABLE' WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED')`, [task.room_id]);
+    await pool.query(
+      `UPDATE rooms SET status='AVAILABLE' WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED','MAINTENANCE')`,
+      [task.room_id]
+    );
   }
-  if (['DIRTY', 'MAINTENANCE', 'OUT_OF_ORDER'].includes(newStatus)) {
-    await pool.query(`UPDATE rooms SET status=$2 WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED')`, [task.room_id, newStatus]);
+  if (['MAINTENANCE', 'OUT_OF_ORDER'].includes(newStatus)) {
+    await pool.query(
+      `UPDATE rooms SET status=$2 WHERE id=$1 AND status NOT IN ('OCCUPIED','RESERVED')`,
+      [task.room_id, newStatus]
+    );
   }
 
   await audit(req.user?.id, 'HOUSEKEEPING_UPDATE', 'housekeeping_tasks', id, {
@@ -213,7 +257,8 @@ export const getStaffWorkload = asyncHandler(async (_req, res) => {
        COUNT(*) AS total
      FROM users u
      LEFT JOIN housekeeping_tasks h ON h.assigned_to = u.id
-     WHERE u.role_id IN (SELECT id FROM roles WHERE name = 'HOUSEKEEPING')
+     WHERE u.role_id IN (SELECT id FROM roles WHERE name IN ('HOUSEKEEPING','HOUSEKEEPING_STAFF','HOUSEKEEPING_SUPERVISOR'))
+       AND COALESCE(u.status, 'ACTIVE') = 'ACTIVE'
      GROUP BY u.id, u.full_name ORDER BY u.full_name`
   );
   res.json({ success: true, data: rows });

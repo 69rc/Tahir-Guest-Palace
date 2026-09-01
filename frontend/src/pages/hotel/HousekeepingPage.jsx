@@ -1,44 +1,79 @@
-import { useEffect, useState } from 'react';
-import { Sparkles, RefreshCw, AlarmClock } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, CardHeader, PageLoader, EmptyState, Button, Stat } from '../../components/ui/index.jsx';
+import { Badge, Card, Button, PageLoader, EmptyState, SearchInput } from '../../components/ui/index.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 
-const TASK_FLOW = ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'INSPECTED'];
+const STEP = {
+  PENDING: 'Waiting',
+  ASSIGNED: 'Assigned',
+  IN_PROGRESS: 'Cleaning',
+  COMPLETED: 'Done',
+  INSPECTED: 'Ready',
+};
 
-const PRIORITY_COLOR = {
-  URGENT: 'red',
-  HIGH: 'amber',
-  MEDIUM: 'blue',
-  LOW: 'gray',
-};
-const TASK_COLOR = {
-  PENDING: 'gray',
-  ASSIGNED: 'blue',
-  IN_PROGRESS: 'violet',
-  COMPLETED: 'green',
-  INSPECTED: 'green',
-};
+function shortName(n) {
+  const parts = String(n || '').trim().split(/\s+/);
+  return parts[parts.length - 1] || n;
+}
+
+function nextStep(status) {
+  if (status === 'PENDING' || status === 'ASSIGNED') return { status: 'IN_PROGRESS', label: 'Start' };
+  if (status === 'IN_PROGRESS') return { status: 'COMPLETED', label: 'Done' };
+  if (status === 'COMPLETED') return { status: 'INSPECTED', label: 'Ready' };
+  return null;
+}
+
+function canGiveTask(status) {
+  return status === 'PENDING' || status === 'ASSIGNED';
+}
+
+function roomLook(r) {
+  const hk = r.hk_status;
+  const rs = r.room_status;
+  if (rs === 'MAINTENANCE' || rs === 'OUT_OF_ORDER') {
+    return { key: 'broken', label: 'Broken', box: 'border-red-200 bg-red-50', text: 'text-red-700' };
+  }
+  if (rs === 'OCCUPIED' || rs === 'RESERVED') {
+    return { key: 'occupied', label: rs === 'RESERVED' ? 'Reserved' : 'Occupied', box: 'border-blue-200 bg-blue-50', text: 'text-blue-700' };
+  }
+  if (hk === 'IN_PROGRESS') {
+    return { key: 'cleaning', label: 'Cleaning', box: 'border-violet-200 bg-violet-50', text: 'text-violet-700' };
+  }
+  if (hk === 'PENDING' || hk === 'ASSIGNED') {
+    return { key: 'waiting', label: 'Waiting', box: 'border-amber-200 bg-amber-50', text: 'text-amber-700' };
+  }
+  if (hk === 'COMPLETED') {
+    return { key: 'done', label: 'Done', box: 'border-amber-200 bg-amber-50', text: 'text-amber-700' };
+  }
+  if (rs === 'CLEANING' || rs === 'DIRTY') {
+    return { key: 'waiting', label: 'Waiting', box: 'border-amber-200 bg-amber-50', text: 'text-amber-700' };
+  }
+  return { key: 'ready', label: 'Ready', box: 'border-ink-100 bg-white', text: 'text-emerald-700' };
+}
 
 export default function HousekeepingPage() {
   const { user } = useAuth();
-  const [status, setStatus] = useState([]);
-  const [tasks, setTasks] = useState([]);
+  const [rooms, setRooms] = useState([]);
   const [dash, setDash] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [tab, setTab] = useState('clean');
+  const [roomFilter, setRoomFilter] = useState('all');
   const toast = useToast();
+
+  const staff = dash?.staffWorkload || [];
+  const isHkStaffOnly = user?.role_name === 'HOUSEKEEPING_STAFF';
+  const myId = user?.id;
 
   const load = async () => {
     setLoading(true);
     try {
-      const [s, t, d] = await Promise.all([
+      const [s, d] = await Promise.all([
         api.get('/housekeeping/status'),
-        api.get('/housekeeping'),
         api.get('/housekeeping/dashboard'),
       ]);
-      setStatus(s.data);
-      setTasks(t.data);
+      setRooms(s.data);
       setDash(d.data);
     } catch (e) {
       toast.error(e.message);
@@ -48,170 +83,258 @@ export default function HousekeepingPage() {
   };
   useEffect(() => { load(); }, []);
 
-  const createTask = async (room, nextStatus) => {
+  const updateTask = async (task, body, ok) => {
     try {
-      await api.post('/housekeeping', { room_id: room.room_id, status: nextStatus });
-      toast.success(`Room ${room.room_number} → ${nextStatus}`);
+      await api.put(`/housekeeping/${task.id}`, body);
+      toast.success(ok);
       load();
     } catch (e) {
       toast.error(e.message);
     }
   };
 
-  const advanceTask = async (task, nextStatus) => {
+  const assignTask = async (task, staffId) => {
+    if (!staffId) return;
+    const name = staff.find((s) => String(s.id) === String(staffId))?.full_name || 'staff';
+    await updateTask(task, { assigned_to: Number(staffId), task_status: 'ASSIGNED' }, `Room ${task.room_number} → ${name}`);
+  };
+
+  const markDirty = async (room) => {
     try {
-      await api.put(`/housekeeping/${task.id}`, { task_status: nextStatus });
-      toast.success(`Task for Room ${task.room_number} → ${nextStatus}`);
+      await api.post('/housekeeping', { room_id: room.room_id, status: 'DIRTY' });
+      toast.success(`Room ${room.room_number} needs cleaning`);
       load();
     } catch (e) {
       toast.error(e.message);
     }
   };
 
-  const isHousekeepingStaff = user?.role_name === 'HOUSEKEEPING' || user?.role_name === 'MAINTENANCE_STAFF';
+  const q = search.trim().toLowerCase();
+  const queue = useMemo(() => {
+    const list = dash?.needsCleaning || [];
+    return list.filter((t) => {
+      if (isHkStaffOnly && t.assigned_to && Number(t.assigned_to) !== Number(myId)) return false;
+      if (!q) return true;
+      return [t.room_number, t.assigned_name, t.note].some((v) => String(v || '').toLowerCase().includes(q));
+    });
+  }, [dash, q, isHkStaffOnly, myId]);
+
+  const inspect = useMemo(() => {
+    const list = dash?.readyToInspect || [];
+    if (!q) return list;
+    return list.filter((t) => String(t.room_number || '').toLowerCase().includes(q));
+  }, [dash, q]);
+
+  const roomList = useMemo(() => {
+    if (!q) return rooms;
+    return rooms.filter((r) => String(r.room_number || '').toLowerCase().includes(q));
+  }, [rooms, q]);
+
+  const roomsWithLook = useMemo(() => roomList.map((r) => ({ ...r, look: roomLook(r) })), [roomList]);
+  const roomsShown = useMemo(() => {
+    if (roomFilter === 'all') return roomsWithLook;
+    return roomsWithLook.filter((r) => r.look.key === roomFilter);
+  }, [roomsWithLook, roomFilter]);
+
+  const roomCounts = useMemo(() => ({
+    all: roomsWithLook.length,
+    waiting: roomsWithLook.filter((r) => r.look.key === 'waiting').length,
+    cleaning: roomsWithLook.filter((r) => r.look.key === 'cleaning').length,
+    done: roomsWithLook.filter((r) => r.look.key === 'done').length,
+    ready: roomsWithLook.filter((r) => r.look.key === 'ready').length,
+    occupied: roomsWithLook.filter((r) => r.look.key === 'occupied').length,
+    broken: roomsWithLook.filter((r) => r.look.key === 'broken').length,
+  }), [roomsWithLook]);
+
+  const floors = [...new Set(roomsShown.map((r) => r.floor))].sort((a, b) => Number(a) - Number(b));
+  const waiting = queue.filter((t) => t.task_status === 'PENDING' || t.task_status === 'ASSIGNED').length;
+  const cleaning = queue.filter((t) => t.task_status === 'IN_PROGRESS').length;
+  const late = Number(dash?.stats?.overdue || 0);
 
   if (loading) return <PageLoader />;
 
-  const counts = status.reduce((a, r) => ({ ...a, [r.hk_status]: (a[r.hk_status] || 0) + 1 }), {});
-  const stats = dash?.stats || {};
-
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-ink-900">Housekeeping</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Task workflow, room cleanliness and staff workload</p>
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Hotel</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Housekeeping</h1>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2 sm:gap-3">
+        <Count label="Waiting" value={waiting} onClick={() => setTab('clean')} active={tab === 'clean'} />
+        <Count label="Cleaning" value={cleaning} onClick={() => setTab('clean')} />
+        <Count label="Ready" value={inspect.length} onClick={() => setTab('ready')} active={tab === 'ready'} />
+        <Count label="Late" value={late} warn={late > 0} />
+      </div>
+
+      <div className="rounded-2xl border border-ink-100 bg-white p-3 sm:p-4 shadow-card space-y-3">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search room…" />
+        <div className="flex gap-2">
+          <TabChip active={tab === 'clean'} onClick={() => setTab('clean')} label="To clean" count={queue.length} />
+          <TabChip active={tab === 'ready'} onClick={() => setTab('ready')} label="Ready" count={inspect.length} />
+          <TabChip active={tab === 'rooms'} onClick={() => setTab('rooms')} label="Rooms" count={roomCounts.all} />
         </div>
-        <Button variant="secondary" onClick={load}><RefreshCw size={16} /> Refresh</Button>
       </div>
 
-      {/* Task workflow stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <Stat label="Pending" value={stats.pending || 0} color="gray" icon={Sparkles} />
-        <Stat label="Assigned" value={stats.assigned || 0} color="blue" icon={Sparkles} />
-        <Stat label="In Progress" value={stats.in_progress || 0} color="violet" icon={Sparkles} />
-        <Stat label="Completed" value={stats.completed || 0} color="green" icon={Sparkles} />
-        <Stat label="Inspected" value={stats.inspected || 0} color="green" icon={Sparkles} />
-        <Stat label="Overdue" value={stats.overdue || 0} color="red" icon={AlarmClock} />
-      </div>
+      {staff.length > 0 && tab === 'clean' && (
+        <p className="text-xs text-ink-500 px-1">
+          {staff.map((s) => `${shortName(s.full_name)} ${Number(s.active) || 0}`).join(' · ')}
+        </p>
+      )}
 
-      {/* Staff workload */}
-      {(dash?.staffWorkload || []).length > 0 && (
+      {tab === 'clean' && (
         <Card>
-          <CardHeader title="Staff Workload" subtitle="Active vs completed tasks per housekeeper" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4">
-            {dash.staffWorkload.map((s) => (
-              <div key={s.id} className="rounded-xl border border-ink-100 p-4">
-                <p className="font-bold text-ink-900">{s.full_name}</p>
-                <p className="text-xs text-ink-500 mt-0.5">Active: <b className="text-violet-600">{s.active}</b> · Completed today: <b className="text-green-600">{s.completed_today}</b></p>
-              </div>
-            ))}
-          </div>
+          {queue.length === 0 ? (
+            <EmptyState title={search ? 'No matching room' : 'Nothing to clean'} message="Dirty rooms after check-out show here." />
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {queue.map((t) => {
+                const step = nextStep(t.task_status);
+                return (
+                  <div key={t.id} className="flex flex-wrap items-center gap-2 px-4 py-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-ink-800">Room {t.room_number}</p>
+                        <Badge status={t.task_status}>{STEP[t.task_status]}</Badge>
+                      </div>
+                      <p className="text-xs text-ink-500 mt-0.5">
+                        {t.assigned_name ? shortName(t.assigned_name) : 'Nobody yet'}
+                        {t.note ? ` · ${t.note}` : ''}
+                      </p>
+                    </div>
+                    {!isHkStaffOnly && canGiveTask(t.task_status) && (
+                      <select
+                        className="input !w-36 !py-1.5 !text-sm"
+                        value={String(t.assigned_to || '')}
+                        onChange={(e) => assignTask(t, e.target.value)}
+                      >
+                        <option value="">Give to…</option>
+                        {staff.map((s) => (
+                          <option key={s.id} value={String(s.id)}>{shortName(s.full_name)}</option>
+                        ))}
+                      </select>
+                    )}
+                    {isHkStaffOnly && !t.assigned_to && (
+                      <Button size="sm" variant="secondary" onClick={() => assignTask(t, myId)}>Take</Button>
+                    )}
+                    {step && (
+                      <Button
+                        size="sm"
+                        onClick={() => updateTask(
+                          t,
+                          {
+                            task_status: step.status,
+                            ...(step.status === 'INSPECTED' ? { status: 'INSPECTED' } : {}),
+                            ...(step.status === 'COMPLETED' ? { status: 'CLEAN' } : {}),
+                          },
+                          `Room ${t.room_number} — ${step.label.toLowerCase()}`
+                        )}
+                      >
+                        {step.label}
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </Card>
       )}
 
-      {/* Priority queue */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="lg:col-span-2">
-          <CardHeader title="Upcoming Cleaning" subtitle="Pending and assigned tasks by priority" />
-          {(dash?.needsCleaning || []).length === 0 ? (
-            <EmptyState title="All caught up" message="No rooms pending cleaning." />
+      {tab === 'ready' && (
+        <Card>
+          {inspect.length === 0 ? (
+            <EmptyState title="None waiting" message="When a room is cleaned it shows here. Tap Ready so front desk can give it out." />
           ) : (
             <div className="divide-y divide-ink-100">
-              {dash.needsCleaning.map((t) => (
-                <div key={t.id} className="flex items-center gap-3 px-5 py-3">
-                  <div className="w-9 h-9 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
-                    <Sparkles size={18} />
-                  </div>
+              {inspect.map((t) => (
+                <div key={t.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-ink-800">Room {t.room_number}</p>
-                      <Badge status={t.priority}><b>{t.priority}</b></Badge>
-                      <Badge status={t.task_status}>{t.task_status}</Badge>
-                    </div>
-                    <p className="text-xs text-ink-500 mt-0.5">{t.room_type} · {t.assigned_name || 'Unassigned'}{t.due_time ? ` · Due ${new Date(t.due_time).toLocaleString()}` : ''}</p>
+                    <p className="text-sm font-semibold text-ink-800">Room {t.room_number}</p>
+                    <p className="text-xs text-ink-500">{t.assigned_name || 'Unassigned'}</p>
                   </div>
-                  {!isHousekeepingStaff && (
-                    <button className="btn-secondary !px-2.5 !py-1.5 !text-xs" onClick={() => advanceTask(t, TASK_FLOW[TASK_FLOW.indexOf(t.task_status) + 1])}>
-                      Advance
-                    </button>
+                  {!isHkStaffOnly && (
+                    <Button size="sm" onClick={() => updateTask(t, { task_status: 'INSPECTED', status: 'INSPECTED' }, `Room ${t.room_number} is ready`)}>
+                      Ready
+                    </Button>
                   )}
                 </div>
               ))}
             </div>
           )}
         </Card>
+      )}
 
+      {tab === 'rooms' && (
         <Card>
-          <CardHeader title="Overdue Tasks" subtitle="Tasks past their due time" />
-          {(dash?.overdueTasks || []).length === 0 ? (
-            <EmptyState title="No overdue tasks" />
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {dash.overdueTasks.map((t) => (
-                <div key={t.id} className="flex items-center gap-3 px-5 py-3">
-                  <div className="w-9 h-9 rounded-lg bg-red-50 text-red-600 flex items-center justify-center shrink-0">
-                    <AlarmClock size={18} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-ink-800">Room {t.room_number}</p>
-                    <p className="text-xs text-ink-500">{t.assigned_name || 'Unassigned'} · due {new Date(t.due_time).toLocaleString()}</p>
-                  </div>
-                  <Badge status={t.priority}>{t.priority}</Badge>
-                </div>
-              ))}
+          <div className="px-4 pt-3 pb-2 space-y-2">
+            <p className="text-xs text-ink-500">Waiting and cleaning rooms stay marked until they are done. Tap a ready room if it needs cleaning.</p>
+            <div className="flex flex-wrap gap-2">
+              <TabChip active={roomFilter === 'all'} onClick={() => setRoomFilter('all')} label="All" count={roomCounts.all} />
+              <TabChip active={roomFilter === 'waiting'} onClick={() => setRoomFilter('waiting')} label="Waiting" count={roomCounts.waiting} />
+              <TabChip active={roomFilter === 'cleaning'} onClick={() => setRoomFilter('cleaning')} label="Cleaning" count={roomCounts.cleaning} />
+              <TabChip active={roomFilter === 'done'} onClick={() => setRoomFilter('done')} label="Done" count={roomCounts.done} />
+              <TabChip active={roomFilter === 'ready'} onClick={() => setRoomFilter('ready')} label="Ready" count={roomCounts.ready} />
             </div>
-          )}
-        </Card>
-      </div>
-
-      {/* Room status grid */}
-      <Card>
-        <CardHeader title="Room Status" subtitle="Click a badge to create a cleaning task" />
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 p-4">
-          {status.map((r) => (
-            <div key={r.room_id} className="rounded-xl border border-ink-100 p-3 text-center">
-              <p className="font-bold text-ink-900">Room {r.room_number}</p>
-              <div className="mt-2">
-                <Badge status={r.hk_status === 'INSPECTED' ? 'CLEAN' : (r.hk_status || 'DIRTY')}>{r.hk_status || 'DIRTY'}</Badge>
-              </div>
-              {r.assigned_name && <p className="text-[11px] text-ink-400 mt-1 truncate">{r.assigned_name}</p>}
-              <div className="mt-3 flex justify-center gap-1.5">
-                <button title="Mark Dirty" onClick={() => createTask(r, 'DIRTY')}
-                  className="p-1.5 rounded-lg text-ink-500 hover:bg-amber-50 hover:text-amber-600 text-xs">Dirty</button>
-                <button title="Mark Clean" onClick={() => createTask(r, 'CLEAN')}
-                  className="p-1.5 rounded-lg text-ink-500 hover:bg-green-50 hover:text-green-600 text-xs">Clean</button>
+          </div>
+          {floors.map((floor) => (
+            <div key={floor} className="px-4 pb-4">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-ink-400 mb-2">Floor {floor}</h2>
+              <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-2">
+                {roomsShown.filter((r) => r.floor === floor).map((r) => {
+                  const ready = r.look.key === 'ready';
+                  return (
+                    <button
+                      key={r.room_id}
+                      type="button"
+                      disabled={!ready}
+                      onClick={() => ready && markDirty(r)}
+                      className={`rounded-lg border px-2 py-2 text-center ${r.look.box} ${ready ? '' : 'cursor-default'}`}
+                    >
+                      <p className="text-sm font-bold text-ink-900">{r.room_number}</p>
+                      <p className={`text-[10px] font-semibold ${r.look.text}`}>{r.look.label}</p>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
-        </div>
-      </Card>
-
-      {/* Activity log */}
-      <Card>
-        <CardHeader title="Task Activity" subtitle="All housekeeping tasks across the hotel" />
-        {tasks.length === 0 ? (
-          <EmptyState title="No tasks yet" />
-        ) : (
-          <div className="divide-y divide-ink-100">
-            {tasks.slice(0, 15).map((t) => (
-              <div key={t.id} className="flex items-center gap-3 px-5 py-3">
-                <div className="w-9 h-9 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
-                  <Sparkles size={18} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-ink-800">Room {t.room_number}</p>
-                    <Badge status={t.task_status}>{t.task_status}</Badge>
-                    {t.priority && <Badge status={t.priority}>{t.priority}</Badge>}
-                  </div>
-                  <p className="text-xs text-ink-500">{t.assigned_name || 'Unassigned'} · {t.note || 'No note'}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
+          {roomsShown.length === 0 && (
+            <EmptyState title="No rooms here" message="Try another status." />
+          )}
+        </Card>
+      )}
     </div>
+  );
+}
+
+function Count({ label, value, hint, warn, onClick, active }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border p-3 bg-white text-left ${
+        warn ? 'border-red-200 bg-red-50/40' : active ? 'border-ink-900' : 'border-ink-100'
+      }`}
+    >
+      <p className="text-xs text-ink-500">{label}</p>
+      <p className={`text-xl font-bold ${warn ? 'text-red-700' : 'text-ink-900'}`}>{value}</p>
+      {hint && <p className="text-[11px] text-ink-400 mt-0.5">{hint}</p>}
+    </button>
+  );
+}
+
+function TabChip({ active, onClick, label, count }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold border ${
+        active ? 'bg-ink-900 text-white border-ink-900' : 'bg-ink-50 text-ink-600 border-ink-100'
+      }`}
+    >
+      {label}
+      <span className={active ? 'text-white/70' : 'text-ink-400'}>{count}</span>
+    </button>
   );
 }

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Users, Plus, Phone, Mail, MapPin, UserCircle2 } from 'lucide-react';
+import { Plus, Phone, Mail, MapPin, UserCircle2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { Badge, Card, Button, Modal, SearchInput, PageLoader, EmptyState, Table } from '../../components/ui/index.jsx';
+import { Badge, Card, Button, Modal, SearchInput, PageLoader, Table } from '../../components/ui/index.jsx';
 import { naira, fmtDate, initials } from '../../utils/format.js';
 import { PERM } from '../../utils/permissions.js';
 
@@ -19,7 +19,7 @@ export default function GuestsPage() {
   const [detailData, setDetailData] = useState(null);
   const toast = useToast();
 
-  const [form, setForm] = useState({ full_name: '', phone: '', email: '', address: '', id_type: '', id_number: '', nationality: 'Nigerian', notes: '' });
+  const [form, setForm] = useState({ full_name: '', phone: '', email: '', address: '', notes: '' });
 
   const load = async () => {
     setLoading(true);
@@ -47,7 +47,7 @@ export default function GuestsPage() {
       await api.post('/guests', form);
       toast.success('Guest created');
       setOpen(false);
-      setForm({ full_name: '', phone: '', email: '', address: '', id_type: '', id_number: '', nationality: 'Nigerian', notes: '' });
+      setForm({ full_name: '', phone: '', email: '', address: '', notes: '' });
       load();
     } catch (err) {
       toast.error(err.message);
@@ -73,14 +73,13 @@ export default function GuestsPage() {
           <div className="w-9 h-9 rounded-full bg-brand-600 text-white flex items-center justify-center text-xs font-bold">{initials(g.full_name)}</div>
           <div>
             <p className="font-semibold text-ink-800">{g.full_name}</p>
-            <p className="text-xs text-ink-500">{g.nationality}</p>
+            <p className="text-xs text-ink-500">{g.phone || g.email || 'No contact'}</p>
           </div>
         </div>
       ),
     },
     { key: 'phone', label: 'Phone', render: (g) => <span className="flex items-center gap-1.5"><Phone size={13} className="text-ink-400" /> {g.phone || '—'}</span> },
     { key: 'email', label: 'Email', render: (g) => <span className="flex items-center gap-1.5"><Mail size={13} className="text-ink-400" /> {g.email || '—'}</span> },
-    { key: 'id_type', label: 'ID', render: (g) => (g.id_type ? `${g.id_type}${g.id_number ? ' · ' + g.id_number : ''}` : '—') },
     { key: 'created_at', label: 'Added', render: (g) => fmtDate(g.created_at) },
   ];
 
@@ -88,10 +87,11 @@ export default function GuestsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Guests</h1>
-          <p className="text-sm text-ink-500 mt-0.5">{guests.length} guest profiles</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Front desk</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Guests</h1>
+          <p className="text-sm text-ink-500 mt-1">Name and phone are enough. You do not need an ID card number.</p>
         </div>
         {canAccess(PERM.GUESTS_MANAGE) && (
           <Button onClick={() => setOpen(true)}><Plus size={16} /> New Guest</Button>
@@ -126,27 +126,6 @@ export default function GuestsPage() {
             <label className="label">Address</label>
             <input className="input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">ID Type</label>
-              <select className="input" value={form.id_type} onChange={(e) => setForm({ ...form, id_type: e.target.value })}>
-                <option value="">Select…</option>
-                <option>National ID</option>
-                <option>Passport</option>
-                <option>Driver's Licence</option>
-                <option>Voter's Card</option>
-                <option>Other</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">ID Number</label>
-              <input className="input" value={form.id_number} onChange={(e) => setForm({ ...form, id_number: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Nationality</label>
-              <input className="input" value={form.nationality} onChange={(e) => setForm({ ...form, nationality: e.target.value })} />
-            </div>
-          </div>
           <div>
             <label className="label">Notes</label>
             <textarea className="input" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
@@ -166,7 +145,7 @@ export default function GuestsPage() {
                 <div className="w-12 h-12 rounded-full bg-brand-600 text-white flex items-center justify-center font-bold">{initials(detail.full_name)}</div>
                 <div>
                   <p className="text-lg font-bold text-ink-900">{detailData.guest.full_name}</p>
-                  <p className="text-sm text-ink-500">{detailData.guest.nationality}</p>
+                  <p className="text-sm text-ink-500">{detailData.guest.phone || detailData.guest.email || 'No contact'}</p>
                 </div>
               </div>
               <Badge>{detailData.outstanding > 0 ? `Owes ${naira(detailData.outstanding)}` : 'Settled'}</Badge>

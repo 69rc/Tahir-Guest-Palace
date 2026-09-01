@@ -1,71 +1,115 @@
-import { useEffect, useState } from 'react';
-import { Wrench, Plus, AlertTriangle, ClipboardList, CheckCircle2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Plus, Wrench } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Card, Button, Modal, PageLoader, EmptyState, Badge, Stat, Table, SearchInput } from '../../components/ui/index.jsx';
-import { naira } from '../../utils/format.js';
+import { Card, Button, Modal, PageLoader, EmptyState, Badge, SearchInput } from '../../components/ui/index.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 
-const EMPTY_FORM = {
-  location: '', room_id: '', facility: 'GENERAL', problem_category: '', description: '',
-  priority: 'MEDIUM', estimated_cost: 0,
+const EMPTY = {
+  location: '',
+  room_id: '',
+  problem_category: 'Plumbing',
+  description: '',
+  priority: 'MEDIUM',
 };
 
-export default function MaintenancePage() {
-  const [tickets, setTickets] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [rooms, setRooms] = useState([]);
-  const [staff, setStaff] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [search, setSearch] = useState('');
-  const [detail, setDetail] = useState(null);
-  const [dOpen, setDOpen] = useState(false);
-  const toast = useToast();
-  const { canAccess } = useAuth();
+const KINDS = ['Plumbing', 'AC', 'Electrical', 'Leak', 'Furniture', 'Other'];
 
+const STATUS_LABEL = {
+  OPEN: 'Open',
+  ASSIGNED: 'Assigned',
+  IN_PROGRESS: 'Working',
+  WAITING_PARTS: 'Waiting parts',
+  RESOLVED: 'Fixed',
+  CLOSED: 'Closed',
+};
+
+const PRIORITY_LABEL = {
+  LOW: 'Low',
+  MEDIUM: 'Normal',
+  HIGH: 'Soon',
+  CRITICAL: 'Urgent',
+};
+
+function shortName(n) {
+  const parts = String(n || '').trim().split(/\s+/);
+  return parts[parts.length - 1] || n;
+}
+
+function nextFix(status) {
+  if (status === 'OPEN' || status === 'ASSIGNED' || status === 'WAITING_PARTS') {
+    return { status: 'IN_PROGRESS', label: 'Start' };
+  }
+  if (status === 'IN_PROGRESS') return { status: 'RESOLVED', label: 'Fixed' };
+  return null;
+}
+
+function canGiveTicket(status) {
+  return status === 'OPEN' || status === 'ASSIGNED';
+}
+
+function inFilter(t, filter) {
+  if (filter === 'now') return !['RESOLVED', 'CLOSED'].includes(t.status);
+  if (filter === 'work') return t.status === 'IN_PROGRESS';
+  if (filter === 'parts') return t.status === 'WAITING_PARTS';
+  if (filter === 'done') return ['RESOLVED', 'CLOSED'].includes(t.status);
+  return true;
+}
+
+export default function MaintenancePage() {
+  const { user, canAccess } = useAuth();
+  const toast = useToast();
   const canManage = canAccess('maintenance:manage');
   const canAssign = canAccess('maintenance:assign');
+
+  const [tickets, setTickets] = useState([]);
+  const [rooms, setRooms] = useState([]);
+  const [technicians, setTechnicians] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('now');
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(EMPTY);
+  const [detail, setDetail] = useState(null);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [t, s, dash] = await Promise.all([
+      const [t, people] = await Promise.all([
         api.get('/maintenance'),
-        api.get('/staff'),
-        api.get('/maintenance/dashboard'),
+        api.get('/maintenance/staff'),
       ]);
       setTickets(t.data);
-      setStats(dash.data);
-      setStaff(s.data.filter((u) => u.department === 'MAINTENANCE' || u.role_name === 'MAINTENANCE_STAFF'));
+      setTechnicians(people.data?.technicians || []);
     } catch (e) {
       toast.error(e.message);
     } finally {
       setLoading(false);
     }
   };
-  const loadRooms = async () => {
-    try {
-      const res = await api.get('/rooms');
-      setRooms(res.data);
-    } catch (e) { /* ignore */ }
-  };
-  useEffect(() => { load(); loadRooms(); }, []);
+
+  useEffect(() => {
+    load();
+    api.get('/rooms').then((r) => setRooms(r.data)).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
+      const room = rooms.find((r) => String(r.id) === String(form.room_id));
       await api.post('/maintenance', {
-        ...form,
+        location: form.location || (room ? `Room ${room.room_number}` : ''),
         room_id: form.room_id || null,
-        estimated_cost: Number(form.estimated_cost) || 0,
+        facility: form.room_id ? 'ROOM' : 'GENERAL',
+        problem_category: form.problem_category,
+        description: form.description,
+        priority: form.priority,
       });
-      toast.success('Maintenance ticket created');
+      toast.success('Ticket opened');
       setOpen(false);
-      setForm(EMPTY_FORM);
+      setForm(EMPTY);
       load();
     } catch (err) {
       toast.error(err.message);
@@ -78,220 +122,246 @@ export default function MaintenancePage() {
     try {
       const res = await api.get(`/maintenance/${t.id}`);
       setDetail(res.data);
-      setDOpen(true);
     } catch (e) {
       toast.error(e.message);
     }
   };
 
-  const changeStatus = async (id, status) => {
+  const patch = async (id, body, ok) => {
     try {
-      await api.put(`/maintenance/${id}`, { status });
-      toast.success(`Status updated to ${status}`);
+      await api.put(`/maintenance/${id}`, body);
+      if (ok) toast.success(ok);
       load();
-    } catch (e) { toast.error(e.message); }
+      if (detail?.id === id) {
+        const res = await api.get(`/maintenance/${id}`);
+        setDetail(res.data);
+      }
+    } catch (e) {
+      toast.error(e.message);
+    }
   };
 
-  const changePriority = async (id, priority) => {
-    try {
-      await api.put(`/maintenance/${id}`, { priority });
-      toast.success(`Priority set to ${priority}`);
-      load();
-    } catch (e) { toast.error(e.message); }
-  };
+  const q = search.trim().toLowerCase();
+  const visible = useMemo(() => tickets.filter((t) => {
+    if (!inFilter(t, filter)) return false;
+    if (!q) return true;
+    return [t.location, t.ticket_no, t.problem_category, t.description, t.reporter_name, t.assigned_name, t.room_number]
+      .some((v) => String(v || '').toLowerCase().includes(q));
+  }), [tickets, filter, q]);
 
-  const assignTicket = async (id, assignedTo) => {
-    try {
-      await api.put(`/maintenance/${id}`, { assigned_to: assignedTo || null, status: assignedTo ? 'ASSIGNED' : undefined });
-      toast.success(assignedTo ? 'Assigned' : 'Unassigned');
-      load();
-    } catch (e) { toast.error(e.message); }
-  };
-
-  const issuePart = async (ticketId, partId) => {
-    try {
-      await api.put(`/maintenance/${ticketId}/parts/${partId}/issue`);
-      toast.success('Part issued — inventory updated');
-      openDetail(detail);
-      load();
-    } catch (e) { toast.error(e.message); }
+  const counts = {
+    now: tickets.filter((t) => inFilter(t, 'now')).length,
+    work: tickets.filter((t) => inFilter(t, 'work')).length,
+    parts: tickets.filter((t) => inFilter(t, 'parts')).length,
+    done: tickets.filter((t) => inFilter(t, 'done')).length,
   };
 
   if (loading) return <PageLoader />;
 
-  const filtered = tickets.filter((t) =>
-    !search || t.ticket_no.toLowerCase().includes(search.toLowerCase()) ||
-    t.location.toLowerCase().includes(search.toLowerCase()) ||
-    (t.problem_category || '').toLowerCase().includes(search.toLowerCase())
-  );
-
-  const columns = [
-    { key: 'ticket_no', label: 'Ticket' },
-    { key: 'location', label: 'Location', render: (r) => <span className="font-medium">{r.location}</span> },
-    { key: 'facility', label: 'Facility', render: (r) => r.facility },
-    { key: 'problem_category', label: 'Category' },
-    { key: 'priority', label: 'Priority', render: (r) => <Badge status={r.priority}>{r.priority}</Badge> },
-    { key: 'status', label: 'Status', render: (r) => <Badge status={r.status}>{r.status}</Badge> },
-    { key: 'assigned_name', label: 'Technician' },
-    { key: 'created_at', label: 'Created', render: (r) => new Date(r.created_at).toLocaleDateString() },
-  ];
-
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Maintenance</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Track facility, room &amp; equipment maintenance</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Hotel</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Maintenance</h1>
         </div>
-        {canManage && <Button onClick={() => setOpen(true)}><Plus size={16} /> Report Issue</Button>}
+        {canManage && (
+          <Button onClick={() => { setForm(EMPTY); setOpen(true); }}>
+            <Plus size={16} /> Report a problem
+          </Button>
+        )}
       </div>
 
-      {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          <Stat label="Open" value={stats.stats.open} icon={ClipboardList} color="amber" />
-          <Stat label="In Progress" value={stats.stats.in_progress} icon={Wrench} color="blue" />
-          <Stat label="Waiting Parts" value={stats.stats.waiting_parts} icon={AlertTriangle} color="violet" />
-          <Stat label="Critical" value={stats.stats.critical} icon={AlertTriangle} color="red" />
-          <Stat label="Resolved" value={stats.stats.resolved} icon={CheckCircle2} color="green" />
-          <Stat label="Out of Order" value={(stats.byFacility.find(f=>f.facility==='ROOM')?.open_count||0)} icon={AlertTriangle} color="red" />
-        </div>
-      )}
+      <div className="grid grid-cols-4 gap-2 sm:gap-3">
+        <Count label="To do" value={counts.now} onClick={() => setFilter('now')} active={filter === 'now'} />
+        <Count label="Working" value={counts.work} onClick={() => setFilter('work')} active={filter === 'work'} />
+        <Count label="Parts" value={counts.parts} onClick={() => setFilter('parts')} active={filter === 'parts'} />
+        <Count label="Fixed" value={counts.done} onClick={() => setFilter('done')} active={filter === 'done'} />
+      </div>
 
-      {stats?.outOfOrderRooms?.length > 0 && (
-        <Card className="p-4 border-red-200 bg-red-50/50">
-          <h3 className="text-sm font-bold text-red-700 mb-2">Rooms Out of Order</h3>
-          <div className="flex flex-wrap gap-2">
-            {stats.outOfOrderRooms.map((r) => (
-              <span key={r.id} className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">
-                {r.room_number} — {r.problem_category} ({r.priority})
-              </span>
-            ))}
-          </div>
-        </Card>
-      )}
+      <div className="rounded-2xl border border-ink-100 bg-white p-3 sm:p-4 shadow-card">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search room, reporter or problem…" />
+      </div>
 
       <Card>
-        <div className="p-4 flex items-center justify-between border-b border-ink-100">
-          <h3 className="text-sm font-bold text-ink-800">Tickets</h3>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search tickets…" className="w-64" />
-        </div>
-        <Table
-          columns={columns}
-          rows={filtered}
-          keyField="id"
-          onRowClick={openDetail}
-          empty={{ title: 'No maintenance tickets' }}
-        />
+        {visible.length === 0 ? (
+          <EmptyState title={search ? 'Nothing matches' : 'No tickets here'} message="Report a leak, broken AC or anything that needs a technician." />
+        ) : (
+          <div className="divide-y divide-ink-100">
+            {visible.map((t) => {
+              const step = nextFix(t.status);
+              return (
+                <div key={t.id} className="px-4 py-3 flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => openDetail(t)} className="flex-1 min-w-[12rem] text-left">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-ink-800">{t.location}</p>
+                      <Badge status={t.priority}>{PRIORITY_LABEL[t.priority] || t.priority}</Badge>
+                      <Badge status={t.status}>{STATUS_LABEL[t.status] || t.status}</Badge>
+                    </div>
+                    <p className="text-xs text-ink-500 mt-0.5">
+                      Reported by <span className="font-medium text-ink-700">{t.reporter_name || 'Unknown'}</span>
+                      {t.assigned_name ? ` · ${shortName(t.assigned_name)}` : ' · Nobody assigned'}
+                    </p>
+                  </button>
+                  {canAssign && canGiveTicket(t.status) && (
+                    <select
+                      className="input !w-36 !py-1.5 !text-sm"
+                      value={String(t.assigned_to || '')}
+                      onChange={(e) => patch(t.id, { assigned_to: e.target.value || null, status: e.target.value ? 'ASSIGNED' : t.status }, e.target.value ? 'Assigned' : 'Unassigned')}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <option value="">Give to…</option>
+                      {technicians.map((s) => (
+                        <option key={s.id} value={String(s.id)}>{shortName(s.full_name)}</option>
+                      ))}
+                    </select>
+                  )}
+                  {canManage && step && (
+                    <Button size="sm" onClick={() => patch(t.id, { status: step.status }, step.label)}>
+                      {step.label}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Report Maintenance Issue" wide>
+      <Modal open={open} onClose={() => setOpen(false)} title="Report a problem">
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="label">What is wrong</label>
+            <textarea
+              className="input"
+              rows={3}
+              required
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder="e.g. AC not cooling, toilet leaking"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label">Location</label>
-              <input className="input" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. Room 208, Pool area, Main kitchen" required />
-            </div>
-            <div>
-              <label className="label">Facility</label>
-              <select className="input" value={form.facility} onChange={(e) => setForm({ ...form, facility: e.target.value })}>
-                {['GENERAL','ROOM','RESTAURANT','CONFERENCE_HALL','POOL','FITNESS_CENTER','SPA','BARBERSHOP','KITCHEN'].map((f) => <option key={f}>{f}</option>)}
+              <label className="label">Kind</label>
+              <select className="input" value={form.problem_category} onChange={(e) => setForm({ ...form, problem_category: e.target.value })}>
+                {KINDS.map((k) => <option key={k}>{k}</option>)}
               </select>
             </div>
             <div>
-              <label className="label">Room (optional)</label>
-              <select className="input" value={form.room_id} onChange={(e) => setForm({ ...form, room_id: e.target.value })}>
-                <option value="">— None —</option>
-                {rooms.map((r) => <option key={r.id} value={r.id}>Room {r.room_number}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Problem Category</label>
-              <input className="input" value={form.problem_category} onChange={(e) => setForm({ ...form, problem_category: e.target.value })} placeholder="e.g. AC_REPAIR, PLUMBING" required />
-            </div>
-            <div>
-              <label className="label">Priority</label>
+              <label className="label">How urgent</label>
               <select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-                <option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option>
+                <option value="LOW">Can wait</option>
+                <option value="MEDIUM">Normal</option>
+                <option value="HIGH">Soon</option>
+                <option value="CRITICAL">Urgent</option>
               </select>
-            </div>
-            <div>
-              <label className="label">Estimated Cost (₦)</label>
-              <input type="number" min="0" className="input" value={form.estimated_cost} onChange={(e) => setForm({ ...form, estimated_cost: e.target.value })} />
             </div>
           </div>
           <div>
-            <label className="label">Description</label>
-            <textarea className="input" rows="3" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} required />
+            <label className="label">Room (if it is a room)</label>
+            <select
+              className="input"
+              value={form.room_id}
+              onChange={(e) => {
+                const id = e.target.value;
+                const room = rooms.find((r) => String(r.id) === String(id));
+                setForm({ ...form, room_id: id, location: room ? `Room ${room.room_number}` : form.location });
+              }}
+            >
+              <option value="">Not a room</option>
+              {rooms.map((r) => (
+                <option key={r.id} value={r.id}>Room {r.room_number}</option>
+              ))}
+            </select>
           </div>
+          {!form.room_id && (
+            <div>
+              <label className="label">Where</label>
+              <input
+                className="input"
+                required={!form.room_id}
+                value={form.location}
+                onChange={(e) => setForm({ ...form, location: e.target.value })}
+                placeholder="e.g. Pool, kitchen, hall"
+              />
+            </div>
+          )}
+          <p className="text-xs text-ink-500">Reporting as {user?.full_name || 'you'}.</p>
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" type="button" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>Create Ticket</Button>
+            <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="submit" loading={saving}>Open ticket</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={dOpen} onClose={() => setDOpen(false)} title={detail?.ticket_no || 'Ticket'} wide>
+      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.location || 'Ticket'}>
         {detail && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-bold text-ink-900">{detail.location}</p>
-                <p className="text-xs text-ink-500">{detail.facility} · {detail.problem_category} · {detail.description}</p>
+            <p className="text-sm text-ink-700">{detail.description}</p>
+            <div className="rounded-xl border border-ink-100 p-3 space-y-1.5 text-sm">
+              <div className="flex justify-between gap-3">
+                <span className="text-ink-500">Reported by</span>
+                <span className="font-semibold text-ink-900">{detail.reporter_name || 'Unknown'}</span>
               </div>
-              <div className="flex gap-2 items-center">
-                <Badge status={detail.priority}>{detail.priority}</Badge>
-                <Badge status={detail.status}>{detail.status}</Badge>
+              <div className="flex justify-between gap-3">
+                <span className="text-ink-500">Technician</span>
+                <span className="font-semibold text-ink-900">{detail.assigned_name || 'Nobody yet'}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-ink-500">Kind</span>
+                <span>{detail.problem_category}</span>
               </div>
             </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-              <div><p className="text-ink-500">Reported by</p><p className="font-medium">{detail.reporter_name || '—'}</p></div>
-              <div><p className="text-ink-500">Assigned to</p><p className="font-medium">{detail.assigned_name || 'Unassigned'}</p></div>
-              <div><p className="text-ink-500">Est. cost</p><p className="font-medium">{naira(detail.estimated_cost)}</p></div>
-              <div><p className="text-ink-500">Actual cost</p><p className="font-medium">{naira(detail.actual_cost)}</p></div>
-            </div>
-
             <div className="flex flex-wrap gap-2">
-              {['ASSIGNED','IN_PROGRESS','WAITING_PARTS','RESOLVED','CLOSED'].map((s) => (
-                <Button key={s} size="sm" variant={detail.status === s ? 'primary' : 'secondary'} onClick={() => changeStatus(detail.id, s)}>{s}</Button>
-              ))}
+              <Badge status={detail.priority}>{PRIORITY_LABEL[detail.priority] || detail.priority}</Badge>
+              <Badge status={detail.status}>{STATUS_LABEL[detail.status] || detail.status}</Badge>
             </div>
-
-            <div className="flex flex-wrap gap-2 items-center">
-              <span className="text-xs font-bold text-ink-500">Priority:</span>
-              {['LOW','MEDIUM','HIGH','CRITICAL'].map((p) => (
-                <Button key={p} size="sm" variant={detail.priority === p ? 'primary' : 'ghost'} onClick={() => changePriority(detail.id, p)}>{p}</Button>
-              ))}
-            </div>
-
-            {canAssign && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-ink-500">Assign:</span>
-                <select className="input !w-auto" value={detail.assigned_to || ''} onChange={(e) => assignTicket(detail.id, e.target.value)}>
-                  <option value="">Unassigned</option>
-                  {staff.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+            {canAssign && canGiveTicket(detail.status) && (
+              <div>
+                <label className="label">Give to</label>
+                <select
+                  className="input"
+                  value={String(detail.assigned_to || '')}
+                  onChange={(e) => patch(detail.id, { assigned_to: e.target.value || null, status: e.target.value ? 'ASSIGNED' : detail.status }, 'Assigned')}
+                >
+                  <option value="">Nobody yet</option>
+                  {technicians.map((s) => (
+                    <option key={s.id} value={String(s.id)}>{shortName(s.full_name)}</option>
+                  ))}
                 </select>
               </div>
             )}
-
-            {detail.parts?.length > 0 && (
-              <div>
-                <h4 className="text-xs font-bold text-ink-800 mb-2">Required Parts</h4>
-                <div className="space-y-1">
-                  {detail.parts.map((p) => (
-                    <div key={p.id} className="flex items-center justify-between bg-ink-50 px-3 py-2 rounded">
-                      <span className="text-sm">{p.item_name} × {p.quantity}</span>
-                      {p.issued ? <Badge status="CLOSED">Issued</Badge> : (
-                        <Button size="sm" variant="primary" onClick={() => issuePart(detail.id, p.id)}><CheckCircle2 size={14} /> Issue</Button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+            {canManage && (
+              <div className="flex justify-end gap-2">
+                {nextFix(detail.status) && (
+                  <Button onClick={() => patch(detail.id, { status: nextFix(detail.status).status }, nextFix(detail.status).label)}>
+                    <Wrench size={16} /> {nextFix(detail.status).label}
+                  </Button>
+                )}
+                {detail.status === 'RESOLVED' && (
+                  <Button variant="secondary" onClick={() => patch(detail.id, { status: 'CLOSED' }, 'Closed')}>Close</Button>
+                )}
               </div>
             )}
           </div>
         )}
       </Modal>
     </div>
+  );
+}
+
+function Count({ label, value, onClick, active, warn }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border p-3 bg-white text-left ${
+        warn ? 'border-red-200 bg-red-50/40' : active ? 'border-ink-900' : 'border-ink-100'
+      }`}
+    >
+      <p className="text-xs text-ink-500">{label}</p>
+      <p className="text-xl font-bold text-ink-900">{value}</p>
+    </button>
   );
 }

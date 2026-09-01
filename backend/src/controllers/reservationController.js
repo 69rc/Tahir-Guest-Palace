@@ -1,8 +1,41 @@
 import pool from '../config/db.js';
 import { asyncHandler, ApiError } from '../utils/helpers.js';
-import { genNumber, audit } from '../utils/common.js';
+import { genNumber, audit, openShiftId } from '../utils/common.js';
+
+async function forfeitBooking(resv, status, action, userId) {
+  await pool.query(`UPDATE reservations SET status=$2 WHERE id=$1`, [resv.id, status]);
+  await pool.query(
+    `UPDATE rooms SET status='AVAILABLE' WHERE id=$1 AND status='RESERVED'`,
+    [resv.room_id]
+  );
+  await pool.query(
+    `UPDATE invoices SET status='CANCELLED', total=paid, balance=0
+     WHERE reservation_id=$1 AND invoice_type='HOTEL' AND status IN ('UNPAID','PARTIAL','PAID')`,
+    [resv.id]
+  );
+  await audit(userId, action, 'reservations', resv.id, {
+    reservation_no: resv.reservation_no,
+    room_id: resv.room_id,
+    deposit: Number(resv.deposit) || 0,
+    deposit_kept: Number(resv.deposit) > 0,
+  });
+}
+
+/** Missed the whole stay (never checked in, checkout date has passed). Room freed, money already paid is kept. */
+export async function expireMissedStays() {
+  const { rows } = await pool.query(
+    `SELECT * FROM reservations
+     WHERE status IN ('CONFIRMED','PENDING')
+       AND check_out_date <= CURRENT_DATE`
+  );
+  for (const resv of rows) {
+    await forfeitBooking(resv, 'NO_SHOW', 'NO_SHOW', null);
+  }
+  return rows.length;
+}
 
 export const getReservations = asyncHandler(async (req, res) => {
+  await expireMissedStays();
   const q = `
     SELECT r.*, g.full_name AS guest_name, g.phone AS guest_phone,
            rm.room_number, rt.name AS room_type_name
@@ -10,7 +43,14 @@ export const getReservations = asyncHandler(async (req, res) => {
     LEFT JOIN guests g ON g.id = r.guest_id
     LEFT JOIN rooms rm ON rm.id = r.room_id
     LEFT JOIN room_types rt ON rt.id = r.room_type_id
-    ORDER BY r.created_at DESC`;
+    ORDER BY CASE r.status
+               WHEN 'CONFIRMED' THEN 1
+               WHEN 'CHECKED_IN' THEN 2
+               WHEN 'PENDING' THEN 3
+               WHEN 'CHECKED_OUT' THEN 4
+               ELSE 5
+             END,
+             r.check_in_date DESC, r.created_at DESC`;
   const { rows } = await pool.query(q);
   res.json({ success: true, data: rows });
 });
@@ -27,7 +67,22 @@ export const getReservation = asyncHandler(async (req, res) => {
     [id]
   );
   if (r.rows.length === 0) throw new ApiError(404, 'Reservation not found.');
-  res.json({ success: true, data: r.rows[0] });
+  const inv = await pool.query(
+    `SELECT total, paid, balance FROM invoices
+     WHERE reservation_id=$1 AND invoice_type='HOTEL'
+     ORDER BY created_at DESC LIMIT 1`,
+    [id]
+  );
+  const stay = inv.rows[0] || {};
+  res.json({
+    success: true,
+    data: {
+      ...r.rows[0],
+      stay_total: Number(stay.total || 0),
+      stay_paid: Number(stay.paid != null ? stay.paid : r.rows[0].deposit || 0),
+      stay_balance: Number(stay.balance || 0),
+    },
+  });
 });
 
 // nights * rate - discount
@@ -94,8 +149,19 @@ export const createReservation = asyncHandler(async (req, res) => {
 
   const room = await pool.query('SELECT * FROM rooms WHERE id = $1', [rid]);
   if (room.rows.length === 0) throw new ApiError(404, 'Room not found.');
-  const actualRate = rate ?? room.rows[0].price_per_night;
+  const roomRate = Number(room.rows[0].price_per_night);
+  const rateBlank = rate === undefined || rate === null || rate === '';
+  const actualRate = rateBlank ? roomRate : Number(rate);
+  if (!Number.isFinite(actualRate) || actualRate < 0) {
+    throw new ApiError(400, 'Rate must be a valid number.');
+  }
   const { nights, subtotal, discount: d, total } = calculateTotals(check_in_date, check_out_date, actualRate, discount);
+  const depositAmt = Number(deposit) || 0;
+  const adultCount = Number(adults) > 0 ? Number(adults) : 1;
+  const childCount = Number(children) > 0 ? Number(children) : 0;
+  const paidAmt = depositAmt;
+  const balanceAmt = Math.max(0, total - paidAmt);
+  const invStatus = paidAmt >= total && total > 0 ? 'PAID' : (paidAmt > 0 ? 'PARTIAL' : 'UNPAID');
 
   const { rows } = await pool.query(
     `INSERT INTO reservations
@@ -103,35 +169,43 @@ export const createReservation = asyncHandler(async (req, res) => {
        adults, children, rate, discount, deposit, payment_method, special_requests, status)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [genNumber('RES'), gid, rid, room.rows[0].room_type_id, check_in_date, check_out_date,
-     adults || 1, children || 0, actualRate, d, deposit || 0, payment_method || null,
+     adultCount, childCount, actualRate, d, depositAmt, payment_method || null,
      special_requests || null, 'CONFIRMED']
   );
 
-  // Open the guest folio with the room charge. A deposit (if any) is recorded
+  // Open the guest folio with the room charge. Amount paid now (if any) is recorded
   // as a payment against this invoice so the balance stays correct.
   const inv = await pool.query(
     `INSERT INTO invoices (invoice_no, guest_id, reservation_id, invoice_type, subtotal, discount, tax, total, paid, balance, status)
      VALUES ($1,$2,$3,'HOTEL',$4,$5,0,$6,$7,$8,$9) RETURNING *`,
-    [genNumber('INV'), gid, rows[0].id, total, d, total, deposit, Math.max(0, total - deposit),
-     deposit >= total ? 'PAID' : (deposit > 0 ? 'PARTIAL' : 'UNPAID')]
+    [genNumber('INV'), gid, rows[0].id, subtotal, d, total, paidAmt, balanceAmt, invStatus]
   );
   await pool.query(
     `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
      VALUES ($1,$2,$3,$4,$5)`,
-    [inv.rows[0].id, `Room ${nights} nights × ₦${Number(actualRate).toLocaleString()}`, nights, actualRate, total]
+    [inv.rows[0].id, `Room ${nights} nights × ₦${Number(actualRate).toLocaleString()}`, nights, actualRate, subtotal]
   );
-  if (deposit > 0) {
+  if (paidAmt > 0) {
+    const shiftId = await openShiftId(req.user?.id);
     await pool.query(
-      `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note)
-       VALUES ($1,$2,$3,$4,$5,$6,'ROOM','Deposit for reservation')`,
-      [genNumber('PAY'), gid, rows[0].id, inv.rows[0].id, deposit, payment_method || 'CASH']
+      `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note, received_by, shift_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'ROOM','Payment on reservation',$7,$8)`,
+      [genNumber('PAY'), gid, rows[0].id, inv.rows[0].id, paidAmt, payment_method || 'CASH', req.user?.id, shiftId]
     );
   }
 
   // Mark room RESERVED
   await pool.query(`UPDATE rooms SET status='RESERVED' WHERE id=$1 AND status='AVAILABLE'`, [rid]);
 
-  await audit(req.user?.id, 'CREATE_RESERVATION', 'reservations', rows[0].id, { reservation_no: rows[0].reservation_no });
+  await audit(req.user?.id, 'CREATE_RESERVATION', 'reservations', rows[0].id, {
+    reservation_no: rows[0].reservation_no,
+    room_id: rid,
+    nights,
+    rate: actualRate,
+    total,
+    deposit: depositAmt,
+    payment_method: payment_method || null,
+  });
   res.status(201).json({ success: true, data: rows[0], calc: { nights, subtotal, discount: d, total } });
 });
 
@@ -157,8 +231,26 @@ export const updateReservationStatus = asyncHandler(async (req, res) => {
 });
 
 export const cancelReservation = asyncHandler(async (req, res) => {
-  req.body.status = 'CANCELLED';
-  return updateReservationStatus(req, res);
+  const id = req.params.id;
+  const { rows: existing } = await pool.query('SELECT * FROM reservations WHERE id=$1', [id]);
+  if (!existing.length) throw new ApiError(404, 'Reservation not found.');
+  const resv = existing[0];
+  if (resv.status === 'CANCELLED') throw new ApiError(400, 'Reservation is already cancelled.');
+  if (resv.status === 'CHECKED_OUT') throw new ApiError(400, 'Cannot cancel a stay that has already checked out.');
+  if (resv.status === 'CHECKED_IN') {
+    throw new ApiError(400, 'Guest is already in house. Check them out instead of cancelling.');
+  }
+
+  const depositAmt = Number(resv.deposit) || 0;
+  await forfeitBooking(resv, 'CANCELLED', 'CANCEL_RESERVATION', req.user?.id);
+
+  res.json({
+    success: true,
+    data: { ...resv, status: 'CANCELLED' },
+    message: depositAmt > 0
+      ? `Reservation cancelled. Deposit of ₦${depositAmt.toLocaleString()} is kept by the hotel.`
+      : 'Reservation cancelled. Room is available again.',
+  });
 });
 
 export const getReservationCalendar = asyncHandler(async (req, res) => {

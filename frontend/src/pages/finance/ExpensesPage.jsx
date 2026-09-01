@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { ReceiptText, Plus } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table } from '../../components/ui/index.jsx';
-import { naira, fmtDate } from '../../utils/format.js';
+import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table, FilterChip } from '../../components/ui/index.jsx';
+import { naira, fmtDate, payLabel } from '../../utils/format.js';
 
 const EXPENSE_CATEGORIES = ['Utilities', 'Salaries', 'Maintenance', 'Food', 'Beverages', 'Cleaning', 'Marketing', 'Transport', 'Other'];
 
@@ -14,6 +14,7 @@ export default function ExpensesPage() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ category: 'Utilities', description: '', amount: '', paid_to: '', method: 'CASH' });
+  const [catFilter, setCatFilter] = useState('all');
   const toast = useToast();
 
   const load = async () => {
@@ -30,6 +31,7 @@ export default function ExpensesPage() {
   useEffect(() => { load(); }, []);
 
   const filtered = expenses.filter((e) => {
+    if (catFilter !== 'all' && e.category !== catFilter) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (e.description || '').toLowerCase().includes(q) || (e.category || '').toLowerCase().includes(q) || (e.paid_to || '').toLowerCase().includes(q);
@@ -58,7 +60,7 @@ export default function ExpensesPage() {
     { key: 'description', label: 'Description', render: (e) => <span className="font-medium">{e.description || '—'}</span> },
     { key: 'amount', label: 'Amount', align: 'right', render: (e) => <span className="font-bold">{naira(e.amount)}</span> },
     { key: 'paid_to', label: 'Paid To', render: (e) => e.paid_to || '—' },
-    { key: 'method', label: 'Method', render: (e) => <Badge status={e.method}>{e.method}</Badge> },
+    { key: 'method', label: 'How', render: (e) => <Badge status={e.method}>{payLabel(e.method)}</Badge> },
     { key: 'incurred_by_name', label: 'By', render: (e) => e.incurred_by_name || '—' },
     { key: 'incurred_at', label: 'Date', render: (e) => fmtDate(e.incurred_at) },
   ];
@@ -67,19 +69,27 @@ export default function ExpensesPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Expenses</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Total recorded: <b>{naira(total)}</b></p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Finance</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Money out</h1>
+          <p className="text-sm text-ink-500 mt-1">Bills the hotel paid — power, salaries, fuel. Total: <b>{naira(total)}</b></p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> Record Expense</Button>
+        <Button onClick={() => setOpen(true)}><Plus size={16} /> Record expense</Button>
+      </div>
+
+      <div className="space-y-3">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search expenses…" />
+        <div className="flex flex-wrap gap-2">
+          <FilterChip active={catFilter === 'all'} onClick={() => setCatFilter('all')} label="All" count={expenses.length} />
+          {EXPENSE_CATEGORIES.map((c) => (
+            <FilterChip key={c} active={catFilter === c} onClick={() => setCatFilter(c)} label={c} count={expenses.filter((e) => e.category === c).length} />
+          ))}
+        </div>
       </div>
 
       <Card>
-        <div className="p-4 border-b border-ink-100">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search expenses…" className="max-w-sm" />
-        </div>
-        <Table columns={columns} rows={filtered} empty={{ title: 'No expenses', message: 'Record your operating expenses.' }} />
+        <Table columns={columns} rows={filtered} empty={{ title: 'No expenses', message: 'Record money the hotel spent.' }} />
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title="Record Expense">
@@ -106,7 +116,7 @@ export default function ExpensesPage() {
             <div>
               <label className="label">Method</label>
               <select className="input" value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}>
-                {['CASH', 'POS', 'TRANSFER', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}
+                {['CASH', 'POS', 'TRANSFER', 'CARD'].map((m) => <option key={m} value={m}>{payLabel(m)}</option>)}
               </select>
             </div>
           </div>

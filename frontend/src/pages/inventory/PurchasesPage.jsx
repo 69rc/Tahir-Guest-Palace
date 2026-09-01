@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ShoppingBag, Plus, Eye } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, Button, Modal, PageLoader, EmptyState, Table } from '../../components/ui/index.jsx';
+import { Badge, Card, Button, Modal, PageLoader, EmptyState, Table, FilterChip } from '../../components/ui/index.jsx';
 import { naira, fmtDateTime } from '../../utils/format.js';
 
 export default function PurchasesPage() {
@@ -14,6 +14,7 @@ export default function PurchasesPage() {
   const [detail, setDetail] = useState(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ supplier_id: '', restaurant_id: '', payment_status: 'UNPAID', note: '', lines: [{ item_id: '', quantity: 1, unit_price: '' }] });
+  const [payFilter, setPayFilter] = useState('all');
   const toast = useToast();
 
   const load = async () => {
@@ -90,7 +91,7 @@ export default function PurchasesPage() {
     { key: 'purchase_no', label: 'Purchase #', render: (p) => <span className="font-semibold">{p.purchase_no}</span> },
     { key: 'supplier_name', label: 'Supplier', render: (p) => p.supplier_name },
     { key: 'total', label: 'Total', align: 'right', render: (p) => <span className="font-semibold">{naira(p.total)}</span> },
-    { key: 'payment_status', label: 'Payment', render: (p) => <Badge status={p.payment_status === 'PAID' ? 'PAID' : 'UNPAID'}>{p.payment_status}</Badge> },
+    { key: 'payment_status', label: 'Payment', render: (p) => <Badge status={p.payment_status === 'PAID' ? 'PAID' : 'UNPAID'}>{p.payment_status === 'PAID' ? 'Paid' : 'Unpaid'}</Badge> },
     { key: 'created_at', label: 'Date', render: (p) => fmtDateTime(p.created_at) },
     { key: 'created_by_name', label: 'By', render: (p) => p.created_by_name || '—' },
     {
@@ -111,14 +112,25 @@ export default function PurchasesPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Purchases</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Record stock purchases from suppliers</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Inventory</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Purchases</h1>
+          <p className="text-sm text-ink-500 mt-1">Buy from a supplier — stock goes up.</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> New Purchase</Button>
+        <Button onClick={() => setOpen(true)}><Plus size={16} /> New purchase</Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <FilterChip active={payFilter === 'all'} onClick={() => setPayFilter('all')} label="All" count={purchases.length} />
+        <FilterChip active={payFilter === 'PAID'} onClick={() => setPayFilter('PAID')} label="Paid" count={purchases.filter((p) => p.payment_status === 'PAID').length} />
+        <FilterChip active={payFilter === 'UNPAID'} onClick={() => setPayFilter('UNPAID')} label="Unpaid" count={purchases.filter((p) => p.payment_status !== 'PAID').length} />
       </div>
 
       <Card>
-        <Table columns={columns} rows={purchases} empty={{ title: 'No purchases yet', message: 'Create a purchase order.' }} />
+        <Table
+          columns={columns}
+          rows={payFilter === 'all' ? purchases : purchases.filter((p) => (payFilter === 'PAID' ? p.payment_status === 'PAID' : p.payment_status !== 'PAID'))}
+          empty={{ title: 'No purchases yet', message: 'Buy from a supplier to add stock.' }}
+        />
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title="New Purchase" wide>
@@ -188,7 +200,7 @@ export default function PurchasesPage() {
                 <p className="text-sm text-ink-500">{detail.supplier_name}</p>
                 <p className="text-xs text-ink-400">{fmtDateTime(detail.created_at)}</p>
               </div>
-              <Badge status={detail.payment_status === 'PAID' ? 'PAID' : 'UNPAID'}>{detail.payment_status}</Badge>
+              <Badge status={detail.payment_status === 'PAID' ? 'PAID' : 'UNPAID'}>{detail.payment_status === 'PAID' ? 'Paid' : 'Unpaid'}</Badge>
             </div>
             <div className="rounded-lg border border-ink-100 divide-y divide-ink-100">
               {(detail.items || []).map((it) => (

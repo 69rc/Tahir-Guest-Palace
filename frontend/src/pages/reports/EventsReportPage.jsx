@@ -32,8 +32,9 @@ export default function EventsReportPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-ink-900">Conference & Events Report</h1>
-        <p className="text-sm text-ink-500 mt-0.5">Hall utilization, event revenue and outstanding balances</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Reports</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Events</h1>
+        <p className="text-sm text-ink-500 mt-1">Halls, bookings, and money from conferences.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

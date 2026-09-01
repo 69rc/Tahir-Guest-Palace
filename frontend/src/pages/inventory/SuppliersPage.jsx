@@ -52,12 +52,13 @@ export default function SuppliersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Suppliers</h1>
-          <p className="text-sm text-ink-500 mt-0.5">{suppliers.length} vendors</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Inventory</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Suppliers</h1>
+          <p className="text-sm text-ink-500 mt-1">Who you buy rice, oil, drinks, and cleaning from.</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add Supplier</Button>
+        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add supplier</Button>
       </div>
 
       <Card>

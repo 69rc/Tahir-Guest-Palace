@@ -45,7 +45,7 @@ export const getCurrentShift = asyncHandler(async (req, res) => {
      FROM payments WHERE shift_id=$1`, [shift.id]
   );
 
-  const expected = Number(shift.opening_cash) + Number(agg.rows[0].gross_sales) - Number(agg.rows[0].refund_total);
+  const expected = Number(shift.opening_cash) + Number(agg.rows[0].cash_total) - Number(agg.rows[0].refund_total);
 
   res.json({
     success: true,
@@ -60,14 +60,39 @@ export const getCurrentShift = asyncHandler(async (req, res) => {
 
 export const getShifts = asyncHandler(async (req, res) => {
   const { status } = req.query;
-  let q = `SELECT s.*, u.full_name AS cashier_name FROM cashier_shifts s LEFT JOIN users u ON u.id=s.staff_user_id`;
   const params = [];
+  let where = '';
   if (status) {
     params.push(status);
-    q += ` WHERE s.status=$1`;
+    where = ` WHERE s.status=$1`;
   }
-  q += ` ORDER BY s.opened_at DESC LIMIT 100`;
-  const { rows } = await pool.query(q, params);
+  const { rows } = await pool.query(
+    `SELECT s.id, s.shift_no, s.staff_user_id, s.opening_cash, s.closing_cash, s.difference, s.status, s.opened_at, s.closed_at, s.notes,
+            u.full_name AS cashier_name,
+            COALESCE(p.cash_total, s.cash_total, 0) AS cash_total,
+            COALESCE(p.pos_total, s.pos_total, 0) AS pos_total,
+            COALESCE(p.transfer_total, s.transfer_total, 0) AS transfer_total,
+            COALESCE(p.card_total, s.card_total, 0) AS card_total,
+            COALESCE(p.refund_total, s.refund_total, 0) AS refund_total,
+            CASE WHEN s.status = 'CLOSED' THEN s.expected_cash
+                 ELSE s.opening_cash + COALESCE(p.cash_total, 0) - COALESCE(p.refund_total, 0)
+            END AS expected_cash
+     FROM cashier_shifts s
+     LEFT JOIN users u ON u.id = s.staff_user_id
+     LEFT JOIN (
+       SELECT shift_id,
+         COALESCE(SUM(amount) FILTER (WHERE method = 'CASH'), 0) AS cash_total,
+         COALESCE(SUM(amount) FILTER (WHERE method = 'POS'), 0) AS pos_total,
+         COALESCE(SUM(amount) FILTER (WHERE method IN ('TRANSFER','BANK_TRANSFER','BANK')), 0) AS transfer_total,
+         COALESCE(SUM(amount) FILTER (WHERE method = 'CARD'), 0) AS card_total,
+         COALESCE(SUM(amount) FILTER (WHERE category = 'REFUND'), 0) AS refund_total
+       FROM payments WHERE shift_id IS NOT NULL
+       GROUP BY shift_id
+     ) p ON p.shift_id = s.id
+     ${where}
+     ORDER BY s.opened_at DESC LIMIT 100`,
+    params
+  );
   res.json({ success: true, data: rows });
 });
 
@@ -158,21 +183,20 @@ export const getShiftReports = asyncHandler(async (req, res) => {
   const performance = await pool.query(
     `SELECT u.id, u.full_name,
        COUNT(s.id) AS shifts_closed,
-       COALESCE(SUM(s.gross_sales),0) AS total_sales,
+       COALESCE(SUM(s.cash_total + s.pos_total + s.transfer_total + s.card_total),0) AS total_sales,
        COALESCE(SUM(s.refund_total),0) AS total_refunds,
-       COALESCE(SUM(s.difference),0) AS total_difference,
-       COALESCE(SUM(s.gross_sales) - NULLIF(COUNT(s.id),0) * s.opening_cash, 0) AS net
+       COALESCE(SUM(s.difference),0) AS total_difference
      FROM users u
      LEFT JOIN cashier_shifts s ON s.staff_user_id = u.id AND s.status='CLOSED'
      GROUP BY u.id, u.full_name HAVING COUNT(s.id) > 0 ORDER BY total_sales DESC`
   );
 
-  // Payment method totals across closed shifts
   const methodTotals = await pool.query(
     `SELECT
        COALESCE(SUM(cash_total),0) AS cash, COALESCE(SUM(pos_total),0) AS pos,
        COALESCE(SUM(transfer_total),0) AS transfer, COALESCE(SUM(card_total),0) AS card,
-       COALESCE(SUM(refund_total),0) AS refunds, COALESCE(SUM(gross_sales),0) AS total
+       COALESCE(SUM(refund_total),0) AS refunds,
+       COALESCE(SUM(cash_total + pos_total + transfer_total + card_total),0) AS total
      FROM cashier_shifts WHERE status='CLOSED'`
   );
 

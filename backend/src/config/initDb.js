@@ -49,18 +49,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'ACTIVE';
 -- Migrate existing is_active values into status once (ACTIVE if true, INACTIVE if false).
 UPDATE users SET status = CASE WHEN is_active = TRUE THEN 'ACTIVE' ELSE 'INACTIVE' END WHERE status IS NULL;
 
--- Many-to-many staff-to-restaurant assignment.
--- Supports RESTAURANT_STAFF (exactly one primary restaurant) and
--- RESTAURANT_MANAGER (one-or-more restaurants).
-CREATE TABLE IF NOT EXISTS staff_restaurants (
-  staff_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  restaurant_id INT NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-  is_primary BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  PRIMARY KEY (staff_id, restaurant_id)
-);
-CREATE INDEX IF NOT EXISTS idx_staff_restaurants_restaurant ON staff_restaurants(restaurant_id);
-
 CREATE TABLE IF NOT EXISTS audit_logs (
   id SERIAL PRIMARY KEY,
   user_id INT REFERENCES users(id) ON DELETE SET NULL,
@@ -162,6 +150,18 @@ CREATE TABLE IF NOT EXISTS restaurants (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Many-to-many staff-to-restaurant assignment.
+-- Supports RESTAURANT_STAFF (exactly one primary restaurant) and
+-- RESTAURANT_MANAGER (one-or-more restaurants).
+CREATE TABLE IF NOT EXISTS staff_restaurants (
+  staff_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  restaurant_id INT NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  is_primary BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (staff_id, restaurant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_staff_restaurants_restaurant ON staff_restaurants(restaurant_id);
+
 CREATE TABLE IF NOT EXISTS restaurant_tables (
   id SERIAL PRIMARY KEY,
   restaurant_id INT REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_restaurant ON orders(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150);
 
 CREATE TABLE IF NOT EXISTS order_items (
   id SERIAL PRIMARY KEY,
@@ -219,14 +220,6 @@ CREATE TABLE IF NOT EXISTS order_items (
   quantity INT DEFAULT 1,
   unit_price NUMERIC(12,2) DEFAULT 0,
   line_total NUMERIC(12,2) DEFAULT 0
-);
-
--- Recipe linking menu items to inventory items (for stock reduction on sale)
-CREATE TABLE IF NOT EXISTS menu_recipes (
-  id SERIAL PRIMARY KEY,
-  menu_item_id INT REFERENCES menu_items(id) ON DELETE CASCADE,
-  inventory_item_id INT REFERENCES inventory_items(id) ON DELETE CASCADE,
-  quantity NUMERIC(12,2) DEFAULT 1
 );
 
 -- ============ INVENTORY ============
@@ -250,6 +243,14 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_inventory_restaurant ON inventory_items(restaurant_id);
+
+-- Recipe linking menu items to inventory items (for stock reduction on sale)
+CREATE TABLE IF NOT EXISTS menu_recipes (
+  id SERIAL PRIMARY KEY,
+  menu_item_id INT REFERENCES menu_items(id) ON DELETE CASCADE,
+  inventory_item_id INT REFERENCES inventory_items(id) ON DELETE CASCADE,
+  quantity NUMERIC(12,2) DEFAULT 1
+);
 
 CREATE TABLE IF NOT EXISTS inventory_transactions (
   id SERIAL PRIMARY KEY,
@@ -525,6 +526,8 @@ ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS due_time TIMESTAMPTZ;
 ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
 ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS inspected_by INT REFERENCES users(id);
 ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS inspection_notes TEXT;
+ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS reported_by INT REFERENCES users(id);
+UPDATE rooms SET status = 'CLEANING' WHERE status IN ('DIRTY', 'CLEAN');
 
 -- ============ GUEST CRM EXTENSIONS ============
 ALTER TABLE guests ADD COLUMN IF NOT EXISTS vip_status VARCHAR(20) DEFAULT 'NORMAL';

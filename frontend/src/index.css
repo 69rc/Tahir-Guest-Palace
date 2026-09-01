@@ -24,8 +24,18 @@ body {
 
 @media print {
   body { background: #fff !important; }
-  aside, header { display: none !important; }
+  aside, header, .print-hide { display: none !important; }
   main { padding: 0 !important; max-width: 100% !important; }
+  body:has(.kitchen-receipt) * { visibility: hidden; }
+  body:has(.kitchen-receipt) .kitchen-receipt,
+  body:has(.kitchen-receipt) .kitchen-receipt * { visibility: visible; }
+  body:has(.kitchen-receipt) .kitchen-receipt {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none;
+  }
 }
 
 @layer components {
@@ -62,4 +72,13 @@ body {
   .td {
     @apply px-4 py-3 text-sm text-ink-700;
   }
+  .dish-tap {
+    animation: dishTap .2s ease-out;
+  }
+}
+
+@keyframes dishTap {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.96); }
+  100% { transform: scale(1); }
 }

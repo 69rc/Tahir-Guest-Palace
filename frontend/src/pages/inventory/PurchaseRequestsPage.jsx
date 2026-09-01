@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { PackagePlus, Plus, CheckCircle2, XCircle, ChevronsRight } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Card, CardHeader, Button, Modal, PageLoader, Badge, EmptyState, Table } from '../../components/ui/index.jsx';
+import { Card, Button, Modal, PageLoader, Badge, EmptyState, Table, FilterChip } from '../../components/ui/index.jsx';
 import { naira, fmtDate } from '../../utils/format.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 
@@ -15,6 +15,7 @@ export default function PurchaseRequestsPage() {
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState(null);
   const [form, setForm] = useState({ department: '', reason: '', items: [{ inventory_item_id: '', item_name: '', quantity: 1, unit_price: 0 }] });
+  const [statusFilter, setStatusFilter] = useState('all');
   const toast = useToast();
   const { canAccess } = useAuth();
 
@@ -97,32 +98,41 @@ export default function PurchaseRequestsPage() {
     } catch (e) { toast.error(e.message); }
   };
 
+  const STATUS_LABEL = { PENDING: 'Waiting', APPROVED: 'Approved', REJECTED: 'Turned down', CONVERTED: 'Ordered' };
   const columns = [
     { key: 'request_no', label: 'Request' },
-    { key: 'requested_by_name', label: 'Requested by' },
-    { key: 'department', label: 'Department', render: (r) => r.department || '—' },
-    { key: 'status', label: 'Status', render: (r) => <Badge status={r.status}>{r.status}</Badge> },
+    { key: 'requested_by_name', label: 'Asked by' },
+    { key: 'department', label: 'Where', render: (r) => r.department || '—' },
+    { key: 'status', label: 'Status', render: (r) => <Badge status={r.status}>{STATUS_LABEL[r.status] || r.status}</Badge> },
     { key: 'created_at', label: 'Date', render: (r) => fmtDate(r.created_at) },
   ];
+  const shown = statusFilter === 'all' ? requests : requests.filter((r) => r.status === statusFilter);
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Procurement</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Purchase requests → approval → purchase order → goods received</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Inventory</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Ask to buy</h1>
+          <p className="text-sm text-ink-500 mt-1">Kitchen or store asks. Manager says yes. Then it becomes a purchase.</p>
         </div>
-        {canCreate && <Button onClick={() => setOpen(true)}><PackagePlus size={16} /> New Purchase Request</Button>}
+        {canCreate && <Button onClick={() => setOpen(true)}><PackagePlus size={16} /> New request</Button>}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <FilterChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} label="All" count={requests.length} />
+        <FilterChip active={statusFilter === 'PENDING'} onClick={() => setStatusFilter('PENDING')} label="Waiting" count={requests.filter((r) => r.status === 'PENDING').length} />
+        <FilterChip active={statusFilter === 'APPROVED'} onClick={() => setStatusFilter('APPROVED')} label="Approved" count={requests.filter((r) => r.status === 'APPROVED').length} />
+        <FilterChip active={statusFilter === 'CONVERTED'} onClick={() => setStatusFilter('CONVERTED')} label="Ordered" count={requests.filter((r) => r.status === 'CONVERTED').length} />
       </div>
 
       <Card>
-        <CardHeader title="Purchase Requests" />
         <Table
           columns={columns}
-          rows={requests}
+          rows={shown}
           keyField="id"
           onRowClick={openDetail}
-          empty={{ title: 'No purchase requests', message: 'Create a purchase request to start the procurement workflow.' }}
+          empty={{ title: 'No requests', message: 'Ask for items when the store is running low.' }}
         />
       </Card>
 
@@ -182,7 +192,7 @@ export default function PurchaseRequestsPage() {
                 <p className="text-xs text-ink-500">{detail.reason || 'No reason'}</p>
               </div>
               <div className="flex gap-2 items-center">
-                <Badge status={detail.status}>{detail.status}</Badge>
+                <Badge status={detail.status}>{STATUS_LABEL[detail.status] || detail.status}</Badge>
                 {canApprove && detail.status === 'PENDING' && (
                   <>
                     <Button size="sm" variant="primary" onClick={() => approve(detail.id, true)}><CheckCircle2 size={14} /> Approve</Button>

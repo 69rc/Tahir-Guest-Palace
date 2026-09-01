@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 import { Wallet, Plus, Printer } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table } from '../../components/ui/index.jsx';
-import { naira, fmtDateTime } from '../../utils/format.js';
+import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table, FilterChip, GuestPicker } from '../../components/ui/index.jsx';
+import { naira, fmtDateTime, payLabel } from '../../utils/format.js';
 
 export default function PaymentsPage() {
   const [payments, setPayments] = useState([]);
@@ -14,6 +14,7 @@ export default function PaymentsPage() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ guest_id: '', amount: '', method: 'CASH', category: 'ROOM', note: '' });
+  const [methodFilter, setMethodFilter] = useState('all');
   const toast = useToast();
 
   const load = async () => {
@@ -31,10 +32,12 @@ export default function PaymentsPage() {
   useEffect(() => { load(); }, []);
 
   const filtered = payments.filter((p) => {
+    if (methodFilter !== 'all' && p.method !== methodFilter) return false;
     if (!search) return true;
     const q = search.toLowerCase();
-    return (p.payment_no || '').toLowerCase().includes(q) || (p.guest_name || '').toLowerCase().includes(q) || (p.method || '').toLowerCase().includes(q);
+    return (p.payment_no || '').toLowerCase().includes(q) || (p.guest_name || '').toLowerCase().includes(q) || payLabel(p.method).toLowerCase().includes(q);
   });
+  const CAT = { ROOM: 'Room', RESTAURANT: 'Restaurant', OTHER: 'Other', SPA: 'Spa', AMENITY: 'Amenity', EVENT: 'Event' };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -56,9 +59,9 @@ export default function PaymentsPage() {
     { key: 'payment_no', label: 'Ref #', render: (p) => <span className="font-semibold">{p.payment_no}</span> },
     { key: 'guest_name', label: 'Guest', render: (p) => <span className="flex items-center gap-1.5"><Wallet size={14} className="text-ink-400" /> {p.guest_name || 'Walk-in'}</span> },
     { key: 'amount', label: 'Amount', align: 'right', render: (p) => <span className="font-bold">{naira(p.amount)}</span> },
-    { key: 'method', label: 'Method', render: (p) => <Badge status={p.method}>{p.method}</Badge> },
-    { key: 'category', label: 'Category', render: (p) => <Badge status={p.category === 'RESTAURANT' ? 'OPEN' : 'PAID'}>{p.category}</Badge> },
-    { key: 'received_by_name', label: 'Received By', render: (p) => p.received_by_name || '—' },
+    { key: 'method', label: 'How', render: (p) => <Badge status={p.method}>{payLabel(p.method)}</Badge> },
+    { key: 'category', label: 'For', render: (p) => <Badge status={p.category === 'RESTAURANT' ? 'OPEN' : 'PAID'}>{CAT[p.category] || p.category}</Badge> },
+    { key: 'received_by_name', label: 'Taken by', render: (p) => p.received_by_name || '—' },
     { key: 'created_at', label: 'Date', render: (p) => fmtDateTime(p.created_at) },
     { key: 'receipt', label: '', align: 'right', render: (p) => (
       <Link to={`/finance/payments/${p.id}/receipt`} className="btn-ghost !p-2" title="Print receipt"><Printer size={15} /></Link>
@@ -69,29 +72,40 @@ export default function PaymentsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Payments</h1>
-          <p className="text-sm text-ink-500 mt-0.5">All incoming payments recorded on folios</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Finance</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Payments</h1>
+          <p className="text-sm text-ink-500 mt-1">Money that came in — cash, POS, transfer, card.</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> Record Payment</Button>
+        <Button onClick={() => setOpen(true)}><Plus size={16} /> Record payment</Button>
+      </div>
+
+      <div className="space-y-3">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search guest or ref…" />
+        <div className="flex flex-wrap gap-2">
+          <FilterChip active={methodFilter === 'all'} onClick={() => setMethodFilter('all')} label="All" count={payments.length} />
+          {['CASH', 'POS', 'TRANSFER', 'CARD'].map((m) => (
+            <FilterChip key={m} active={methodFilter === m} onClick={() => setMethodFilter(m)} label={payLabel(m)} count={payments.filter((p) => p.method === m).length} />
+          ))}
+        </div>
       </div>
 
       <Card>
-        <div className="p-4 border-b border-ink-100">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search payments…" className="max-w-sm" />
-        </div>
-        <Table columns={columns} rows={filtered} empty={{ title: 'No payments yet', message: 'Record the first payment.' }} />
+        <Table columns={columns} rows={filtered} empty={{ title: 'No payments yet', message: 'Record cash taken at the desk.' }} />
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title="Record Payment">
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <label className="label">Guest</label>
-            <select className="input" value={form.guest_id} onChange={(e) => setForm({ ...form, guest_id: e.target.value })}>
-              <option value="">Select guest (optional)…</option>
-              {guests.map((g) => <option key={g.id} value={g.id}>{g.full_name}</option>)}
-            </select>
+            <label className="label">Guest (optional)</label>
+            <GuestPicker
+              guests={guests}
+              value={form.guest_id}
+              showAllOnEmpty
+              placeholder="Search name or phone…"
+              onSelect={(g) => setForm({ ...form, guest_id: g ? g.id : '' })}
+            />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -101,7 +115,7 @@ export default function PaymentsPage() {
             <div>
               <label className="label">Method *</label>
               <select className="input" value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}>
-                {['CASH', 'POS', 'TRANSFER', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}
+                {['CASH', 'POS', 'TRANSFER', 'CARD'].map((m) => <option key={m} value={m}>{payLabel(m)}</option>)}
               </select>
             </div>
             <div>

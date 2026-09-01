@@ -10,13 +10,24 @@ export const getRoomTypes = asyncHandler(async (_req, res) => {
 export const getRooms = asyncHandler(async (req, res) => {
   const status = req.query.status;
   let q = `SELECT rm.*, rt.name AS room_type, rt.capacity,
-             (SELECT g.full_name FROM check_ins ci
-              JOIN guests g ON g.id = ci.guest_id
-              JOIN reservations r ON r.id = ci.reservation_id
-              WHERE ci.room_id = rm.id AND r.status = 'CHECKED_IN'
-              ORDER BY ci.checkin_time DESC LIMIT 1) AS current_guest
+             stay.guest_name AS current_guest,
+             stay.guest_phone,
+             stay.reservation_id AS current_reservation_id,
+             stay.reservation_status,
+             stay.check_in_date,
+             stay.check_out_date
            FROM rooms rm
-           LEFT JOIN room_types rt ON rt.id = rm.room_type_id`;
+           LEFT JOIN room_types rt ON rt.id = rm.room_type_id
+           LEFT JOIN LATERAL (
+             SELECT r.id AS reservation_id, r.status AS reservation_status,
+                    r.check_in_date, r.check_out_date,
+                    g.full_name AS guest_name, g.phone AS guest_phone
+             FROM reservations r
+             JOIN guests g ON g.id = r.guest_id
+             WHERE r.room_id = rm.id AND r.status IN ('CHECKED_IN','CONFIRMED')
+             ORDER BY CASE WHEN r.status = 'CHECKED_IN' THEN 0 ELSE 1 END, r.check_in_date
+             LIMIT 1
+           ) stay ON TRUE`;
   const params = [];
   if (status) {
     params.push(status);

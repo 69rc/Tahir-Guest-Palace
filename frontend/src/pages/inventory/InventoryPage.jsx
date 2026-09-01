@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Package, Plus, ArrowLeftRight } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, Button, Modal, SearchInput, PageLoader, EmptyState, Table } from '../../components/ui/index.jsx';
+import { Badge, Card, Button, Modal, SearchInput, PageLoader, EmptyState, Table, FilterChip } from '../../components/ui/index.jsx';
 import { naira } from '../../utils/format.js';
 
 export default function InventoryPage() {
@@ -10,6 +10,8 @@ export default function InventoryPage() {
   const [categories, setCategories] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [stockFilter, setStockFilter] = useState('all');
+  const [catFilter, setCatFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
   const [adjustItem, setAdjustItem] = useState(null);
@@ -33,11 +35,16 @@ export default function InventoryPage() {
   };
   useEffect(() => { load(); }, []);
 
+  const isLow = (i) => Number(i.quantity) <= Number(i.min_quantity);
   const filtered = items.filter((i) => {
+    if (stockFilter === 'low' && !isLow(i)) return false;
+    if (stockFilter === 'ok' && isLow(i)) return false;
+    if (catFilter !== 'all' && String(i.category_id) !== String(catFilter) && i.category_name !== catFilter) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (i.name || '').toLowerCase().includes(q) || (i.category_name || '').toLowerCase().includes(q);
   });
+  const lowCount = items.filter(isLow).length;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -84,9 +91,9 @@ export default function InventoryPage() {
     ) },
     { key: 'unit', label: 'Unit' },
     { key: 'quantity', label: 'In Stock', render: (i) => (
-      <span className={`font-bold ${i.quantity <= i.min_quantity ? 'text-red-600' : 'text-ink-800'}`}>{i.quantity} <span className="font-normal text-ink-400">/ min {i.min_quantity}</span></span>
+      <span className={`font-bold ${isLow(i) ? 'text-red-600' : 'text-ink-800'}`}>{Number(i.quantity)} <span className="font-normal text-ink-400">/ min {Number(i.min_quantity)}</span></span>
     ) },
-    { key: 'stock_status', label: 'Status', render: (i) => i.quantity <= i.min_quantity ? <Badge status="UNPAID">LOW</Badge> : <Badge status="PAID">OK</Badge> },
+    { key: 'stock_status', label: 'Status', render: (i) => isLow(i) ? <Badge status="UNPAID">Needs restock</Badge> : <Badge status="PAID">Enough</Badge> },
     { key: 'cost_price', label: 'Cost', align: 'right', render: (i) => naira(i.cost_price) },
     { key: 'selling_price', label: 'Selling', align: 'right', render: (i) => naira(i.selling_price) },
     { key: 'value', label: 'Stock Value', align: 'right', render: (i) => <span className="font-semibold">{naira(i.cost_price * i.quantity)}</span> },
@@ -99,22 +106,37 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Inventory</h1>
-          <p className="text-sm text-ink-500 mt-0.5">{items.length} tracked items · Stock reduces on every sale</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Inventory</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Products</h1>
+          <p className="text-sm text-ink-500 mt-1">What the kitchen and store have. Stock drops when you sell.</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add Item</Button>
+        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add item</Button>
+      </div>
+
+      <div className="space-y-3">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search products…" />
+        <div className="flex flex-wrap gap-2">
+          <FilterChip active={stockFilter === 'all'} onClick={() => setStockFilter('all')} label="All" count={items.length} />
+          <FilterChip active={stockFilter === 'ok'} onClick={() => setStockFilter('ok')} label="Enough" count={items.length - lowCount} />
+          <FilterChip active={stockFilter === 'low'} onClick={() => setStockFilter('low')} label="Needs restock" count={lowCount} />
+        </div>
+        {categories.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            <FilterChip active={catFilter === 'all'} onClick={() => setCatFilter('all')} label="Every kind" />
+            {categories.map((c) => (
+              <FilterChip key={c.id} active={String(catFilter) === String(c.id)} onClick={() => setCatFilter(c.id)} label={c.name} />
+            ))}
+          </div>
+        )}
       </div>
 
       <Card>
-        <div className="p-4 border-b border-ink-100">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search products…" className="max-w-sm" />
-        </div>
-        <Table columns={columns} rows={filtered} empty={{ title: 'No items found', message: 'Add your first inventory item.' }} />
+        <Table columns={columns} rows={filtered} empty={{ title: 'No items here', message: 'Add rice, oil, drinks — anything you count.' }} />
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Add Inventory Item" wide>
+      <Modal open={open} onClose={() => setOpen(false)} title="Add item" wide>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="label">Name *</label>
@@ -165,15 +187,15 @@ export default function InventoryPage() {
         </form>
       </Modal>
 
-      <Modal open={!!adjustItem} onClose={() => setAdjustItem(null)} title={`Adjust Stock — ${adjustItem?.name}`}>
+      <Modal open={!!adjustItem} onClose={() => setAdjustItem(null)} title={`Change stock — ${adjustItem?.name}`}>
         <form onSubmit={handleAdjust} className="space-y-4">
           <div className="rounded-lg bg-ink-50 p-3 text-sm">Current quantity: <b>{adjustItem?.quantity} {adjustItem?.unit}</b></div>
           <div>
             <label className="label">Type</label>
             <select className="input" value={adjForm.type} onChange={(e) => setAdjForm({ ...adjForm, type: e.target.value })}>
-              <option value="ADDITION">Addition</option>
-              <option value="ADJUSTMENT">Adjustment (decrease)</option>
-              <option value="WASTAGE">Wastage</option>
+              <option value="ADDITION">Add (found extra / received)</option>
+              <option value="ADJUSTMENT">Take off (count was high)</option>
+              <option value="WASTAGE">Waste (spoiled / thrown)</option>
             </select>
           </div>
           <div>

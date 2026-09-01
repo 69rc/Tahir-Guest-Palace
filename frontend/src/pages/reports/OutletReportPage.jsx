@@ -39,8 +39,9 @@ export default function OutletReportPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Outlet Report</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Revenue breakdown by restaurant/outlet</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Reports</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Outlets</h1>
+          <p className="text-sm text-ink-500 mt-1">Each kitchen — what it sold.</p>
         </div>
         <select
           className="input max-w-xs"

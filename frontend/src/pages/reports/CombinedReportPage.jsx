@@ -42,14 +42,15 @@ export default function CombinedReportPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-ink-900">Combined Management Report</h1>
-        <p className="text-sm text-ink-500 mt-0.5">Total hotel revenue across all departments</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Reports</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">All together</h1>
+        <p className="text-sm text-ink-500 mt-1">Rooms, restaurants, spa, events — one picture.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Stat label="Total Revenue" value={naira(totalRevenue)} icon={TrendingUp} color="green" />
-        <Stat label="Total Expenses" value={naira(totalExpenses)} icon={Wallet} color="red" />
-        <Stat label="Net Revenue" value={naira(netRevenue)} icon={Calculator} color={netRevenue >= 0 ? 'blue' : 'red'} />
+        <Stat label="All money in" value={naira(totalRevenue)} icon={TrendingUp} color="green" />
+        <Stat label="Money out" value={naira(totalExpenses)} icon={Wallet} color="red" />
+        <Stat label="Left over" value={naira(netRevenue)} icon={Calculator} color={netRevenue >= 0 ? 'blue' : 'red'} />
         <Stat label="Revenue Streams" value={byCategory.length} icon={TrendingUp} color="brand" />
       </div>
 

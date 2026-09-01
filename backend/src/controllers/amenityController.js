@@ -1,6 +1,6 @@
 import pool from '../config/db.js';
 import { asyncHandler, ApiError } from '../utils/helpers.js';
-import { genNumber, audit } from '../utils/common.js';
+import { genNumber, audit, openShiftId } from '../utils/common.js';
 import { getOrCreateFolioInvoice, addInvoiceLine } from '../services/folioService.js';
 
 // Map an amenity's category to a finance payment category
@@ -129,6 +129,9 @@ export const getAppointments = asyncHandler(async (req, res) => {
 export const createAppointment = asyncHandler(async (req, res) => {
   const { amenity_id, service_id, guest_id, staff_user_id, customer_name, start_time, end_time, price, notes } = req.body;
   if (!amenity_id || !start_time || !end_time) throw new ApiError(400, 'Amenity, start and end time required.');
+  if (!guest_id && !String(customer_name || '').trim()) {
+    throw new ApiError(400, 'Guest or walk-in name is required.');
+  }
   if (new Date(end_time) <= new Date(start_time)) throw new ApiError(400, 'End time must be after start time.');
 
   const amenity = await pool.query(`SELECT * FROM amenities WHERE id=$1`, [amenity_id]);
@@ -262,10 +265,11 @@ export const settleAppointment = asyncHandler(async (req, res) => {
         `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
          VALUES ($1,$2,1,$3,$3)`,
         [inv.rows[0].id, `${a.amenity_name} — ${a.service_name || 'Service'}`, total]);
+      const shiftId = await openShiftId(req.user?.id, client);
       await client.query(
-        `INSERT INTO payments (payment_no, guest_id, invoice_id, service_appointment_id, amount, method, category, note, received_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'Service payment',$8)`,
-        [genNumber('PAY'), gid || null, inv.rows[0].id, req.params.id, total, method || 'CASH', category, req.user?.id]);
+        `INSERT INTO payments (payment_no, guest_id, invoice_id, service_appointment_id, amount, method, category, note, received_by, shift_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'Service payment',$8,$9)`,
+        [genNumber('PAY'), gid || null, inv.rows[0].id, req.params.id, total, method || 'CASH', category, req.user?.id, shiftId]);
     }
 
     await client.query('COMMIT');

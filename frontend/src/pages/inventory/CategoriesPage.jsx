@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Tags, Plus } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput } from '../../components/ui/index.jsx';
+import { Card, Button, Modal, PageLoader, EmptyState, SearchInput } from '../../components/ui/index.jsx';
 
 export default function CategoriesPage() {
   const [categories, setCategories] = useState([]);
@@ -48,12 +48,13 @@ export default function CategoriesPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Inventory Categories</h1>
-          <p className="text-sm text-ink-500 mt-0.5">{categories.length} categories</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Inventory</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Kinds</h1>
+          <p className="text-sm text-ink-500 mt-1">Groups for store items — rice, drinks, cleaning.</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add Category</Button>
+        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add kind</Button>
       </div>
 
       <Card>
@@ -68,7 +69,6 @@ export default function CategoriesPage() {
               <div key={c.id} className="flex items-center gap-3 p-4 rounded-xl border border-ink-100">
                 <div className="w-10 h-10 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center shrink-0"><Tags size={18} /></div>
                 <p className="font-semibold text-ink-800 flex-1 min-w-0 truncate">{c.name}</p>
-                <Badge>Active</Badge>
               </div>
             ))}
           </div>

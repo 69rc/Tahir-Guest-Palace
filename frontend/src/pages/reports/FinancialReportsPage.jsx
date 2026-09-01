@@ -40,15 +40,16 @@ export default function FinancialReportsPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-ink-900">Financial Reports</h1>
-        <p className="text-sm text-ink-500 mt-0.5">Consolidated profit & loss overview</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Reports</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Money</h1>
+        <p className="text-sm text-ink-500 mt-1">What came in, what went out, what is left.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Stat label="Total Income" value={naira(accounting.income)} icon={TrendingUp} color="green" />
-        <Stat label="Total Expenses" value={naira(accounting.expenses)} icon={TrendingDown} color="red" />
-        <Stat label="Net Income" value={naira(accounting.netIncome)} icon={Calculator} color={accounting.netIncome >= 0 ? 'green' : 'red'} />
-        <Stat label="Outstanding" value={naira(accounting.outstanding)} icon={AlertTriangle} color="amber" />
+        <Stat label="Money in" value={naira(accounting.income)} icon={TrendingUp} color="green" />
+        <Stat label="Money out" value={naira(accounting.expenses)} icon={TrendingDown} color="red" />
+        <Stat label="Left over" value={naira(accounting.netIncome)} icon={Calculator} color={accounting.netIncome >= 0 ? 'green' : 'red'} />
+        <Stat label="Still owed" value={naira(accounting.outstanding)} icon={AlertTriangle} color="amber" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

@@ -3,14 +3,18 @@ import { Link } from 'react-router-dom';
 import { FileText, Eye, Printer } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table } from '../../components/ui/index.jsx';
-import { naira, fmtDateTime } from '../../utils/format.js';
+import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table, FilterChip } from '../../components/ui/index.jsx';
+import { naira, fmtDateTime, payLabel } from '../../utils/format.js';
+
+const INV_STATUS = { PAID: 'Paid', UNPAID: 'Due', PARTIAL: 'Part paid', ISSUED: 'Open' };
+const INV_TYPE = { ROOM: 'Room', RESTAURANT: 'Restaurant', FOLIO: 'Stay', OTHER: 'Other' };
 
 export default function InvoicesPage() {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [detail, setDetail] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all');
   const toast = useToast();
 
   const load = async () => {
@@ -27,6 +31,8 @@ export default function InvoicesPage() {
   useEffect(() => { load(); }, []);
 
   const filtered = invoices.filter((i) => {
+    if (statusFilter === 'paid' && i.status !== 'PAID') return false;
+    if (statusFilter === 'due' && i.status === 'PAID') return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (i.invoice_no || '').toLowerCase().includes(q) || (i.guest_name || '').toLowerCase().includes(q) || String(i.room_number || '').includes(q);
@@ -45,11 +51,11 @@ export default function InvoicesPage() {
     { key: 'invoice_no', label: 'Invoice #', render: (i) => <span className="font-semibold">{i.invoice_no}</span> },
     { key: 'guest_name', label: 'Guest', render: (i) => i.guest_name || 'Walk-in' },
     { key: 'room_number', label: 'Room', render: (i) => i.room_number || '—' },
-    { key: 'invoice_type', label: 'Type', render: (i) => <Badge status={i.invoice_type === 'RESTAURANT' ? 'OPEN' : 'PAID'}>{i.invoice_type}</Badge> },
+    { key: 'invoice_type', label: 'For', render: (i) => <Badge status={i.invoice_type === 'RESTAURANT' ? 'OPEN' : 'PAID'}>{INV_TYPE[i.invoice_type] || i.invoice_type}</Badge> },
     { key: 'total', label: 'Total', align: 'right', render: (i) => naira(i.total) },
     { key: 'paid', label: 'Paid', align: 'right', render: (i) => <span className="text-green-600">{naira(i.paid)}</span> },
     { key: 'balance', label: 'Balance', align: 'right', render: (i) => <span className="font-bold">{naira(i.balance)}</span> },
-    { key: 'status', label: 'Status', render: (i) => <Badge status={i.status}>{i.status}</Badge> },
+    { key: 'status', label: 'Status', render: (i) => <Badge status={i.status}>{INV_STATUS[i.status] || i.status}</Badge> },
     { key: 'actions', label: '', render: (i) => (
       <div className="flex justify-end gap-1">
         <Link to={`/finance/invoices/${i.id}/print`} className="btn-ghost !p-2" title="Print invoice"><Printer size={15} /></Link>
@@ -63,15 +69,22 @@ export default function InvoicesPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-ink-900">Invoices</h1>
-        <p className="text-sm text-ink-500 mt-0.5">Guest folio and restaurant invoices</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Finance</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Bills</h1>
+        <p className="text-sm text-ink-500 mt-1">What a guest still owes, or has already paid.</p>
+      </div>
+
+      <div className="space-y-3">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search guest, room or bill…" />
+        <div className="flex flex-wrap gap-2">
+          <FilterChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} label="All" count={invoices.length} />
+          <FilterChip active={statusFilter === 'due'} onClick={() => setStatusFilter('due')} label="Due" count={invoices.filter((i) => i.status !== 'PAID').length} />
+          <FilterChip active={statusFilter === 'paid'} onClick={() => setStatusFilter('paid')} label="Paid" count={invoices.filter((i) => i.status === 'PAID').length} />
+        </div>
       </div>
 
       <Card>
-        <div className="p-4 border-b border-ink-100">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search invoices…" className="max-w-sm" />
-        </div>
-        <Table columns={columns} rows={filtered} onRowClick={openDetail} empty={{ title: 'No invoices yet', message: 'Invoices are created automatically during checkout and POS sales.' }} />
+        <Table columns={columns} rows={filtered} onRowClick={openDetail} empty={{ title: 'No bills yet', message: 'Bills appear after check-out and restaurant sales.' }} />
       </Card>
 
       <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.invoice_no} wide>
@@ -90,7 +103,7 @@ function InvoiceDetail({ d }) {
           <p className="text-xs text-ink-500">{d.guest_phone || ''} {d.guest_email ? '· ' + d.guest_email : ''}</p>
           <p className="text-xs text-ink-500 mt-0.5">Room {d.room_number || '—'} · {d.room_type_name || ''}</p>
         </div>
-        <Badge status={d.status}>{d.status}</Badge>
+        <Badge status={d.status}>{INV_STATUS[d.status] || d.status}</Badge>
       </div>
 
       <div className="rounded-lg border border-ink-100 divide-y divide-ink-100">
@@ -119,7 +132,7 @@ function InvoiceDetail({ d }) {
           <div className="rounded-lg border border-ink-100 divide-y divide-ink-100">
             {(d.payments || []).map((p) => (
               <div key={p.id} className="flex items-center justify-between px-4 py-2 text-sm">
-                <span>{p.payment_no} · {p.method}</span>
+                <span>{p.payment_no} · {payLabel(p.method)}</span>
                 <span className="font-semibold text-green-600">{naira(p.amount)}</span>
               </div>
             ))}

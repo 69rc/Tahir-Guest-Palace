@@ -36,27 +36,28 @@ export default function AccountingPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-ink-900">Accounting Reports</h1>
-        <p className="text-sm text-ink-500 mt-0.5">Income, expenses and net position</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Finance</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Books</h1>
+        <p className="text-sm text-ink-500 mt-1">Money in minus money out. What guests still owe.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-5"><p className="text-xs text-ink-500">Income</p><p className="text-xl font-bold text-green-600">{naira(data.income)}</p></Card>
-        <Card className="p-5"><p className="text-xs text-ink-500">Expenses</p><p className="text-xl font-bold text-red-600">{naira(data.expenses)}</p></Card>
+        <Card className="p-5"><p className="text-xs text-ink-500">Money in</p><p className="text-xl font-bold text-green-600">{naira(data.income)}</p></Card>
+        <Card className="p-5"><p className="text-xs text-ink-500">Money out</p><p className="text-xl font-bold text-red-600">{naira(data.expenses)}</p></Card>
         <Card className="p-5">
-          <p className="text-xs text-ink-500">Net Income</p>
+          <p className="text-xs text-ink-500">Left over</p>
           <p className={`text-xl font-bold ${data.netIncome >= 0 ? 'text-green-600' : 'text-red-600'}`}>{naira(data.netIncome)}</p>
         </Card>
         <Card className="p-5">
-          <p className="text-xs text-ink-500">Outstanding</p>
+          <p className="text-xs text-ink-500">Still owed</p>
           <p className="text-xl font-bold text-amber-600">{naira(data.outstanding)}</p>
-          <p className="text-xs text-ink-500">{data.outstandingCount} open folios</p>
+          <p className="text-xs text-ink-500">{data.outstandingCount} open bills</p>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
-          <CardHeader title="Income by Category" />
+          <CardHeader title="Money in by kind" />
           <div className="p-4 h-64">
             {incomeChart.length === 0 ? <EmptyState title="No income" /> : (
               <ResponsiveContainer width="100%" height="100%">
@@ -73,7 +74,7 @@ export default function AccountingPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Expenses by Category" />
+          <CardHeader title="Money out by kind" />
           <div className="p-4 h-64">
             {expenseChart.length === 0 ? <EmptyState title="No expenses" /> : (
               <ResponsiveContainer width="100%" height="100%">
@@ -92,7 +93,7 @@ export default function AccountingPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
-          <CardHeader title="Income Detail" />
+          <CardHeader title="Money in detail" />
           <div className="divide-y divide-ink-100">
             {data.incomeByCategory.map((c) => (
               <div key={c.category} className="flex items-center justify-between px-5 py-3 text-sm">
@@ -103,7 +104,7 @@ export default function AccountingPage() {
           </div>
         </Card>
         <Card>
-          <CardHeader title="Expense Detail" />
+          <CardHeader title="Money out detail" />
           <div className="divide-y divide-ink-100">
             {data.expenseByCategory.map((c) => (
               <div key={c.category} className="flex items-center justify-between px-5 py-3 text-sm">
@@ -126,7 +127,7 @@ export default function AccountingPage() {
           </div>
           <div className="text-right text-sm">
             <p className="text-ink-500">Outstanding balance: <b className="text-amber-600">{naira(data.outstanding)}</b></p>
-            <p className="text-ink-400 text-xs mt-1">Balance due from guests with open folios</p>
+            <p className="text-ink-400 text-xs mt-1">Still owed by guests who have not fully paid</p>
           </div>
         </div>
       </Card>

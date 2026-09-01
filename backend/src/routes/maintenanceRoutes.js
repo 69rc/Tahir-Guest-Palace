@@ -4,12 +4,13 @@ import { PERMISSIONS } from '../config/permissions.js';
 import {
   getMaintenanceTickets, getMaintenanceTicket, createMaintenanceTicket,
   updateMaintenanceTicket, deleteMaintenanceTicket,
-  addMaintenancePart, issueMaintenancePart, getMaintenanceDashboard
+  addMaintenancePart, issueMaintenancePart, getMaintenanceDashboard, getMaintenanceStaff
 } from '../controllers/maintenanceController.js';
 
 const router = Router();
 
 router.get('/dashboard', protect, required(PERMISSIONS.MAINTENANCE_VIEW), getMaintenanceDashboard);
+router.get('/staff', protect, required(PERMISSIONS.MAINTENANCE_VIEW), getMaintenanceStaff);
 router.get('/', protect, required(PERMISSIONS.MAINTENANCE_VIEW), getMaintenanceTickets);
 router.get('/:id', protect, required(PERMISSIONS.MAINTENANCE_VIEW), getMaintenanceTicket);
 router.post('/', protect, required(PERMISSIONS.MAINTENANCE_MANAGE), createMaintenanceTicket);

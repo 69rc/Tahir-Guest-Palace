@@ -1,54 +1,50 @@
 import { useRestaurant } from '../../context/RestaurantContext.jsx';
+import { isFlagOn } from '../../utils/format.js';
 
-// Role-aware restaurant switcher.
-// - RESTAURANT_STAFF: read-only label of their single assigned outlet (cannot change).
-// - RESTAURANT_MANAGER: dropdown limited to assigned outlets.
-// - Admin / GM / Manager: selectable buttons across all outlets.
-export default function RestaurantSelector({ variant = 'buttons' }) {
-  const { restaurants, activeRestaurantId, setActiveRestaurantId, isStaff, isManager, loading } = useRestaurant();
+export default function RestaurantSelector() {
+  const { restaurants, activeRestaurantId, setActiveRestaurantId, isStaff, loading } = useRestaurant();
 
-  if (loading) return null;
+  if (loading || restaurants.length === 0) return null;
 
-  // Restaurant staff: always a read-only indicator.
-  if (isStaff) {
-    const active = restaurants.find((r) => String(r.id) === String(activeRestaurantId));
+  if (isStaff || restaurants.length === 1) {
+    const active = restaurants.find((r) => String(r.id) === String(activeRestaurantId)) || restaurants[0];
+    const openNow = isFlagOn(active?.is_active);
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">Restaurant</span>
-        <span className="text-sm font-bold text-ink-800">{active?.name || '—'}</span>
+      <div className="rounded-2xl border border-ink-100 bg-white px-4 py-3 shadow-card">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">This outlet</p>
+        <div className="flex items-center justify-between gap-3 mt-0.5">
+          <p className="text-sm font-bold text-ink-900">{active?.name || '—'}</p>
+          <span className={`text-[10px] font-bold uppercase tracking-wide ${openNow ? 'text-emerald-600' : 'text-ink-400'}`}>
+            {openNow ? 'Open' : 'Closed'}
+          </span>
+        </div>
       </div>
     );
   }
 
-  // Manager: dropdown restricted to assigned outlets.
-  if (isManager) {
-    return (
-      <select
-        className="input !py-1.5 text-sm font-semibold"
-        value={activeRestaurantId ?? ''}
-        onChange={(e) => setActiveRestaurantId(e.target.value)}
-      >
-        {restaurants.map((r) => (
-          <option key={r.id} value={r.id}>{r.name}</option>
-        ))}
-      </select>
-    );
-  }
-
-  // Admin/GM/Manager: buttons across all outlets.
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {restaurants.map((r) => (
-        <button
-          key={r.id}
-          onClick={() => setActiveRestaurantId(r.id)}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
-            String(r.id) === String(activeRestaurantId) ? 'bg-brand-600 text-white border-brand-600' : 'bg-white border-ink-200 text-ink-700 hover:bg-ink-50'
-          }`}
-        >
-          {r.name}
-        </button>
-      ))}
+    <div className="rounded-2xl border border-ink-100 bg-white p-1.5 shadow-card">
+      <div className="flex gap-1 overflow-x-auto">
+        {restaurants.map((r) => {
+          const on = String(r.id) === String(activeRestaurantId);
+          const openNow = isFlagOn(r.is_active);
+          return (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => setActiveRestaurantId(r.id)}
+              className={`flex-1 min-w-[10.5rem] rounded-xl px-4 py-2.5 text-left overflow-hidden transition-colors ${
+                on ? 'bg-ink-900 text-white shadow-sm' : 'text-ink-600 hover:bg-ink-50'
+              }`}
+            >
+              <span className="block text-sm font-semibold truncate">{r.name}</span>
+              <span className={`block text-[10px] font-medium ${on ? 'text-white/70' : openNow ? 'text-emerald-600' : 'text-ink-400'}`}>
+                {openNow ? 'Open' : 'Closed'}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

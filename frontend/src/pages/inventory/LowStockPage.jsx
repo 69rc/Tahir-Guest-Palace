@@ -33,8 +33,9 @@ export default function LowStockPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-ink-900">Low Stock Items</h1>
-          <p className="text-sm text-ink-500 mt-0.5">{items.length} items at or below reorder level</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Inventory</p>
+          <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Needs restock</h1>
+          <p className="text-sm text-ink-500 mt-1">Items at or below the minimum you set.</p>
         </div>
         <Link to="/inventory/purchases"><Button><PackagePlus size={16} /> Order More</Button></Link>
       </div>
@@ -57,7 +58,7 @@ export default function LowStockPage() {
                       <p className="font-bold text-ink-900">{i.name}</p>
                       <p className="text-xs text-ink-500">{i.category_name || 'Uncategorized'}</p>
                     </div>
-                    <Badge status="UNPAID">LOW</Badge>
+                    <Badge status="UNPAID">Needs restock</Badge>
                   </div>
                   <div className="mt-3 flex items-center justify-between text-sm">
                     <span>In stock: <b className={i.quantity === 0 ? 'text-red-600' : ''}>{i.quantity} {i.unit}</b></span>

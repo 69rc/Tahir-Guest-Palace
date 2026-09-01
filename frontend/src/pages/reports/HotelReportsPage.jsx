@@ -35,8 +35,9 @@ export default function HotelReportsPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-ink-900">Hotel Reports</h1>
-        <p className="text-sm text-ink-500 mt-0.5">Reservation, check-in and check-out activity</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Reports</p>
+        <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Hotel</h1>
+        <p className="text-sm text-ink-500 mt-1">Reservations, check-ins and check-outs.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
