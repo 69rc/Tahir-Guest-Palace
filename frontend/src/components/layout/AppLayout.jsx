@@ -60,10 +60,22 @@ function NavSideLink({ to, label, icon: Icon, onNavigate }) {
 }
 
 export default function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user, logout, canAccess } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
+
+  const visibleNav = NAV
+    .map((item) => {
+      if (item.type === 'group' && item.children) {
+        const children = item.children.filter((c) => canAccess(...c.perms));
+        if (children.length === 0) return null;
+        return { ...item, children };
+      }
+      if (item.type === 'link' && !canAccess(...(item.perms || []))) return null;
+      return item;
+    })
+    .filter(Boolean);
 
   const handleLogout = () => {
     logout();
@@ -82,7 +94,7 @@ export default function AppLayout() {
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
-        {NAV.map((item, i) =>
+        {visibleNav.map((item, i) =>
           item.type === 'link' ? (
             <NavSideLink key={i} to={item.to} label={item.label} icon={item.icon} onNavigate={() => setMobileOpen(false)} />
           ) : (

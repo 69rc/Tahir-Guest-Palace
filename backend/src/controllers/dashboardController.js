@@ -23,9 +23,42 @@ export async function getDashboard(req, res, next) {
       SELECT
         COALESCE((SELECT SUM(amount) FROM payments WHERE category='ROOM' OR category='OTHER'), 0) AS hotel_revenue,
         COALESCE((SELECT SUM(amount) FROM payments WHERE category='RESTAURANT'), 0) AS restaurant_revenue,
+        COALESCE((SELECT SUM(amount) FROM payments WHERE category='SPA'), 0) AS spa_revenue,
+        COALESCE((SELECT SUM(amount) FROM payments WHERE category='BARBERSHOP'), 0) AS barbershop_revenue,
+        COALESCE((SELECT SUM(amount) FROM payments WHERE category='AMENITY'), 0) AS pool_revenue,
+        COALESCE((SELECT SUM(amount) FROM payments WHERE category='EVENT'), 0) AS event_revenue,
         COALESCE((SELECT SUM(amount) FROM payments), 0) AS total_revenue,
-        COALESCE((SELECT SUM(balance) FROM invoices WHERE status IN ('PARTIAL','UNPAID')), 0) AS outstanding
+        COALESCE((SELECT SUM(amount) FROM payments WHERE created_at::date = CURRENT_DATE), 0) AS today_revenue,
+        COALESCE((SELECT SUM(balance) FROM invoices WHERE status IN ('PARTIAL','UNPAID')), 0) AS outstanding,
+        COALESCE((SELECT SUM(amount) FROM expenses WHERE incurred_at::date = CURRENT_DATE), 0) AS today_expenses,
+        COALESCE((SELECT SUM(amount) FROM expenses), 0) AS total_expenses
     `);
+
+    // Food & beverage by outlet (incl. Frosty Pops flagged outlet type)
+    const outletSales = await pool.query(`
+      SELECT res.id, res.name, res.outlet_type,
+             COALESCE(SUM(o.total), 0) AS total
+      FROM restaurants res
+      LEFT JOIN orders o ON o.restaurant_id = res.id AND o.status NOT IN ('CANCELLED','OPEN')
+      GROUP BY res.id, res.name, res.outlet_type
+      ORDER BY res.id
+    `);
+
+    // Events
+    const events = await pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM event_bookings WHERE event_date = CURRENT_DATE AND status NOT IN ('CANCELLED')) AS today_events,
+        (SELECT COUNT(*) FROM event_bookings WHERE event_date >= CURRENT_DATE AND status NOT IN ('CANCELLED','COMPLETED')) AS upcoming_events,
+        (SELECT COALESCE(SUM(rate + invoiced_amount - discount),0) FROM event_bookings WHERE status NOT IN ('CANCELLED')) AS event_revenue,
+        (SELECT COALESCE(SUM(balance),0) FROM event_bookings WHERE status NOT IN ('CANCELLED','COMPLETED')) AS event_outstanding,
+        (SELECT COUNT(*) FROM conference_halls WHERE status IN ('RESERVED','OCCUPIED')) AS halls_in_use
+    `);
+    const upcomingEvents = await pool.query(
+      `SELECT b.id, b.booking_no, b.customer_name, b.event_date, b.start_time, h.name AS hall_name, b.status
+       FROM event_bookings b LEFT JOIN conference_halls h ON h.id=b.hall_id
+       WHERE b.event_date >= CURRENT_DATE AND b.status NOT IN ('CANCELLED','COMPLETED')
+       ORDER BY b.event_date LIMIT 5`
+    );
 
     const lowStock = await pool.query(
       `SELECT id, name, unit, quantity, min_quantity
@@ -60,6 +93,8 @@ export async function getDashboard(req, res, next) {
       SELECT to_char(created_at, 'YYYY-MM-DD') AS day,
              SUM(amount) FILTER (WHERE category='ROOM' OR category='OTHER') AS hotel,
              SUM(amount) FILTER (WHERE category='RESTAURANT') AS restaurant,
+             SUM(amount) FILTER (WHERE category='SPA' OR category='BARBERSHOP' OR category='AMENITY') AS services,
+             SUM(amount) FILTER (WHERE category='EVENT') AS events,
              SUM(amount) AS total
       FROM payments
       WHERE created_at >= now() - interval '14 days'
@@ -95,6 +130,9 @@ export async function getDashboard(req, res, next) {
         rooms: { ...roomMap, total: totalRooms },
         today: todayCounts.rows[0],
         revenue: revenue.rows[0],
+        outletSales: restaurantSales.rows,
+        events: events.rows[0],
+        upcomingEvents: upcomingEvents.rows,
         lowStock: lowStock.rows,
         recentReservations: recentReservations.rows,
         recentPayments: recentPayments.rows,

@@ -79,4 +79,26 @@ export const STATUS_COLORS = {
   POS: 'blue',
   TRANSFER: 'violet',
   CARD: 'amber',
+
+  ASSIGNED: 'blue',
+  IN_PROGRESS: 'amber',
+  WAITING_PARTS: 'violet',
+  RESOLVED: 'green',
+  CLOSED: 'gray',
+  CRITICAL: 'red',
+  LOW: 'gray',
+  MEDIUM: 'amber',
+  HIGH: 'amber',
+  URGENT: 'red',
+
+  APPROVED: 'green',
+  REJECTED: 'red',
+  CONVERTED: 'blue',
+  RECEIVED: 'green',
+  SENT: 'blue',
+  DELIVERED: 'green',
+
+  ACTIVE: 'green',
+  INACTIVE: 'gray',
+  SUSPENDED: 'red',
 };

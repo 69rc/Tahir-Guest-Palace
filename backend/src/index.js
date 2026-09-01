@@ -16,6 +16,13 @@ import housekeepingRoutes from './routes/housekeepingRoutes.js';
 import staffRoutes from './routes/staffRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
 import publicRoutes from './routes/publicRoutes.js';
+import amenityRoutes from './routes/amenityRoutes.js';
+import eventRoutes from './routes/eventRoutes.js';
+import maintenanceRoutes from './routes/maintenanceRoutes.js';
+import shiftRoutes from './routes/shiftRoutes.js';
+import procurementRoutes from './routes/procurementRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
+import searchRoutes from './routes/searchRoutes.js';
 
 import { notFound, errorHandler } from './utils/helpers.js';
 
@@ -38,6 +45,13 @@ app.use('/api/housekeeping', housekeepingRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/amenities', amenityRoutes);
+app.use('/api/events', eventRoutes);
+app.use('/api/maintenance', maintenanceRoutes);
+app.use('/api/shifts', shiftRoutes);
+app.use('/api/purchase-requests', procurementRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/search', searchRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

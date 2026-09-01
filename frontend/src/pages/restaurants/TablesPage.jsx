@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import { Grid2x2, Plus } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
+import { useRestaurant } from '../../context/RestaurantContext.jsx';
+import RestaurantSelector from '../../components/restaurant/RestaurantSelector.jsx';
 import { Badge, Card, Button, Modal, PageLoader, EmptyState } from '../../components/ui/index.jsx';
+import { PERM } from '../../utils/permissions.js';
 
 const TABLE_COLORS = {
   AVAILABLE: 'border-green-300 bg-green-50 text-green-700',
@@ -11,24 +15,14 @@ const TABLE_COLORS = {
 };
 
 export default function TablesPage() {
-  const [restaurants, setRestaurants] = useState([]);
+  const { canAccess } = useAuth();
+  const { activeRestaurantId, restaurants, loading: restLoading } = useRestaurant();
   const [tables, setTables] = useState([]);
-  const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ restaurant_id: '', table_number: '', capacity: 4, status: 'AVAILABLE' });
   const toast = useToast();
-
-  const loadRestaurants = async () => {
-    try {
-      const res = await api.get('/restaurants');
-      setRestaurants(res.data);
-      if (!selected && res.data.length) setSelected(res.data[0].id);
-    } catch (e) {
-      toast.error(e.message);
-    }
-  };
 
   const loadTables = async (rid) => {
     if (!rid) { setTables([]); return; }
@@ -43,8 +37,7 @@ export default function TablesPage() {
     }
   };
 
-  useEffect(() => { loadRestaurants(); }, []);
-  useEffect(() => { if (selected) loadTables(selected); }, [selected]);
+  useEffect(() => { if (activeRestaurantId) loadTables(activeRestaurantId); }, [activeRestaurantId]);
 
   useEffect(() => {
     if (form.restaurant_id) {
@@ -57,7 +50,7 @@ export default function TablesPage() {
     try {
       await api.put(`/restaurants/tables/${id}/status`, { status });
       toast.success('Table status updated');
-      loadTables(selected);
+      loadTables(activeRestaurantId);
     } catch (err) {
       toast.error(err.message);
     }
@@ -70,9 +63,8 @@ export default function TablesPage() {
       await api.post('/restaurants/tables', form);
       toast.success('Table created');
       setOpen(false);
-      setForm({ restaurant_id: selected || '', table_number: '', capacity: 4, status: 'AVAILABLE' });
-      loadRestaurants();
-      loadTables(selected);
+      setForm({ restaurant_id: activeRestaurantId || '', table_number: '', capacity: 4, status: 'AVAILABLE' });
+      loadTables(activeRestaurantId);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -80,7 +72,7 @@ export default function TablesPage() {
     }
   };
 
-  if (loading && tables.length === 0) return <PageLoader />;
+  if ((loading && tables.length === 0) || (restLoading && !activeRestaurantId)) return <PageLoader />;
 
   return (
     <div className="space-y-5">
@@ -89,18 +81,12 @@ export default function TablesPage() {
           <h1 className="text-2xl font-bold text-ink-900">Restaurant Tables</h1>
           <p className="text-sm text-ink-500 mt-0.5">Manage seating across outlets</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add Table</Button>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {restaurants.map((r) => (
-          <button key={r.id} onClick={() => setSelected(r.id)}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
-              String(r.id) === String(selected) ? 'bg-brand-600 text-white border-brand-600' : 'bg-white border-ink-200 text-ink-700 hover:bg-ink-50'
-            }`}>
-            {r.name}
-          </button>
-        ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <RestaurantSelector />
+          {canAccess(PERM.TABLES_MANAGE) && (
+            <Button onClick={() => setOpen(true)}><Plus size={16} /> Add Table</Button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -115,8 +101,14 @@ export default function TablesPage() {
               <Badge status={t.status === 'AVAILABLE' ? 'PAID' : t.status === 'OCCUPIED' ? 'OPEN' : 'RESERVED'}>{t.status}</Badge>
             </div>
             <div className="mt-3 flex gap-1.5">
-              <button onClick={() => changeStatus(t.id, 'AVAILABLE')} className="flex-1 text-xs font-semibold py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200">Free</button>
-              <button onClick={() => changeStatus(t.id, 'OCCUPIED')} className="flex-1 text-xs font-semibold py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200">Occupy</button>
+              {canAccess(PERM.TABLES_MANAGE) ? (
+                <>
+                  <button onClick={() => changeStatus(t.id, 'AVAILABLE')} className="flex-1 text-xs font-semibold py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200">Free</button>
+                  <button onClick={() => changeStatus(t.id, 'OCCUPIED')} className="flex-1 text-xs font-semibold py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200">Occupy</button>
+                </>
+              ) : (
+                <Badge status={t.status === 'OCCUPIED' ? 'OPEN' : t.status === 'RESERVED' ? 'RESERVED' : 'PAID'}>{t.status}</Badge>
+              )}
             </div>
           </div>
         ))}
@@ -127,7 +119,7 @@ export default function TablesPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="label">Restaurant</label>
-            <select className="input" value={form.restaurant_id || selected || ''} onChange={(e) => setForm({ ...form, restaurant_id: e.target.value })}>
+            <select className="input" value={form.restaurant_id || activeRestaurantId || ''} onChange={(e) => setForm({ ...form, restaurant_id: e.target.value })}>
               {restaurants.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           </div>

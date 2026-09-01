@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import { Receipt, BedDouble } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useRestaurant } from '../../context/RestaurantContext.jsx';
+import RestaurantSelector from '../../components/restaurant/RestaurantSelector.jsx';
 import { Badge, Card, CardHeader, Button, Modal, PageLoader, EmptyState, SearchInput } from '../../components/ui/index.jsx';
 import { naira, fmtDateTime } from '../../utils/format.js';
 
 export default function OrdersPage() {
+  const { activeRestaurantId, loading: restLoading } = useRestaurant();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -13,25 +16,18 @@ export default function OrdersPage() {
   const toast = useToast();
 
   const load = async () => {
+    if (!activeRestaurantId) return;
     setLoading(true);
     try {
-      const res = await api.get('/restaurants')
-        .then(async (r) => {
-          const all = [];
-          for (const rest of r.data) {
-            const ordersRes = await api.get(`/restaurants/${rest.id}/orders`);
-            all.push(...ordersRes.data);
-          }
-          return all;
-        });
-      setOrders(res);
+      const res = await api.get(`/restaurants/${activeRestaurantId}/orders`);
+      setOrders(res.data);
     } catch (e) {
       toast.error(e.message);
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { if (activeRestaurantId) load(); }, [activeRestaurantId]);
 
   const filtered = orders.filter((o) => {
     if (!search) return true;
@@ -60,13 +56,16 @@ export default function OrdersPage() {
     </div>
   );
 
-  if (loading) return <PageLoader />;
+  if ((loading && !orders.length) || (restLoading && !activeRestaurantId)) return <PageLoader />;
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold text-ink-900">Restaurant Orders</h1>
-        <p className="text-sm text-ink-500 mt-0.5">All orders across outlets</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-ink-900">Restaurant Orders</h1>
+          <p className="text-sm text-ink-500 mt-0.5">Orders across selected outlet</p>
+        </div>
+        <RestaurantSelector />
       </div>
 
       <Card>

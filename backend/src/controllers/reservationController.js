@@ -107,18 +107,20 @@ export const createReservation = asyncHandler(async (req, res) => {
      special_requests || null, 'CONFIRMED']
   );
 
-  // Reservation deposit if any
+  // Open the guest folio with the room charge. A deposit (if any) is recorded
+  // as a payment against this invoice so the balance stays correct.
+  const inv = await pool.query(
+    `INSERT INTO invoices (invoice_no, guest_id, reservation_id, invoice_type, subtotal, discount, tax, total, paid, balance, status)
+     VALUES ($1,$2,$3,'HOTEL',$4,$5,0,$6,$7,$8,$9) RETURNING *`,
+    [genNumber('INV'), gid, rows[0].id, total, d, total, deposit, Math.max(0, total - deposit),
+     deposit >= total ? 'PAID' : (deposit > 0 ? 'PARTIAL' : 'UNPAID')]
+  );
+  await pool.query(
+    `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [inv.rows[0].id, `Room ${nights} nights × ₦${Number(actualRate).toLocaleString()}`, nights, actualRate, total]
+  );
   if (deposit > 0) {
-    const inv = await pool.query(
-      `INSERT INTO invoices (invoice_no, guest_id, reservation_id, invoice_type, subtotal, discount, tax, total, paid, balance, status)
-       VALUES ($1,$2,$3,'HOTEL',$4,0,0,$4,$4,0,'PAID') RETURNING *`,
-      [genNumber('INV'), gid, rows[0].id, total]
-    );
-    await pool.query(
-      `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
-       VALUES ($1,'Room stay ('||$2||' nights × ₦'||$3||')',1,$4,$4)`,
-      [inv.rows[0].id, nights, actualRate, total]
-    );
     await pool.query(
       `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note)
        VALUES ($1,$2,$3,$4,$5,$6,'ROOM','Deposit for reservation')`,
@@ -157,4 +159,114 @@ export const updateReservationStatus = asyncHandler(async (req, res) => {
 export const cancelReservation = asyncHandler(async (req, res) => {
   req.body.status = 'CANCELLED';
   return updateReservationStatus(req, res);
+});
+
+export const getReservationCalendar = asyncHandler(async (req, res) => {
+  const { start, end } = req.query;
+  if (!start || !end) throw new ApiError(400, 'Start and end dates are required.');
+  if (new Date(end) <= new Date(start)) throw new ApiError(400, 'End date must be after start date.');
+
+  // All reservations overlapping the range
+  const { rows: reservations } = await pool.query(
+    `SELECT r.id, r.reservation_no, r.guest_id, r.room_id, g.full_name AS guest_name,
+            g.phone AS guest_phone, r.check_in_date, r.check_out_date, r.status, r.rate,
+            rm.room_number, rm.room_type_id, rt.name AS room_type_name,
+            r.discount, r.deposit
+     FROM reservations r
+     LEFT JOIN guests g ON g.id = r.guest_id
+     LEFT JOIN rooms rm ON rm.id = r.room_id
+     LEFT JOIN room_types rt ON rt.id = rm.room_type_id
+     WHERE r.check_in_date < $2 AND r.check_out_date > $1
+     ORDER BY r.check_in_date ASC`,
+    [start, end]
+  );
+
+  // All rooms for the grid
+  const { rows: rooms } = await pool.query(
+    `SELECT rm.id, rm.room_number, rm.floor, rm.status, rm.price_per_night,
+            rt.name AS room_type_name
+     FROM rooms rm
+     LEFT JOIN room_types rt ON rt.id = rm.room_type_id
+     ORDER BY substring(rm.room_number from '^[0-9]+')::int NULLS LAST, rm.room_number`
+  );
+
+  // Rooms out of order for the range
+  const { rows: outOfOrder } = await pool.query(
+    `SELECT t.id AS ticket_id, t.room_id, rm.room_number, t.priority, t.status AS ticket_status
+     FROM maintenance_tickets t
+     JOIN rooms rm ON rm.id = t.room_id
+     WHERE rm.status = 'OUT_OF_ORDER' AND t.status NOT IN ('RESOLVED','CLOSED')`
+  );
+
+  res.json({
+    success: true,
+    data: {
+      rooms,
+      reservations,
+      outOfOrder,
+    }
+  });
+});
+
+export const updateReservationDates = asyncHandler(async (req, res) => {
+  const id = req.params.id;
+  const { check_in_date, check_out_date, room_id } = req.body;
+
+  if (!check_in_date && !check_out_date && !room_id) {
+    throw new ApiError(400, 'Provide at least one field to update.');
+  }
+
+  const { rows: existing } = await pool.query(
+    `SELECT * FROM reservations WHERE id=$1`, [id]
+  );
+  if (!existing.length) throw new ApiError(404, 'Reservation not found.');
+  const resv = existing[0];
+
+  const newCheckIn = check_in_date || resv.check_in_date;
+  const newCheckOut = check_out_date || resv.check_out_date;
+  const newRoomId = room_id || resv.room_id;
+
+  if (new Date(newCheckOut) <= new Date(newCheckIn)) {
+    throw new ApiError(400, 'Check-out must be after check-in.');
+  }
+
+  // Validate target room is not OUT_OF_ORDER
+  const room = await pool.query('SELECT * FROM rooms WHERE id=$1', [newRoomId]);
+  if (!room.rows.length) throw new ApiError(404, 'Room not found.');
+  if (room.rows[0].status === 'OUT_OF_ORDER' || room.rows[0].status === 'MAINTENANCE') {
+    throw new ApiError(400, `Cannot book room ${room.rows[0].room_number}: it is out of order/maintenance.`);
+  }
+
+  // Conflict prevention (excluding self)
+  const clash = await pool.query(
+    `SELECT res.id, rm.room_number FROM reservations res
+     JOIN rooms rm ON rm.id = res.room_id
+     WHERE res.room_id = $1 AND res.id != $2
+       AND res.status IN ('CONFIRMED','CHECKED_IN','PENDING')
+       AND res.check_in_date < $4 AND res.check_out_date > $3
+     LIMIT 1`,
+    [newRoomId, id, newCheckIn, newCheckOut]
+  );
+  if (clash.rows.length > 0) {
+    throw new ApiError(400, `Conflict: room ${clash.rows[0].room_number} is already booked for these dates.`);
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE reservations SET check_in_date=$2, check_out_date=$3, room_id=$4 WHERE id=$1 RETURNING *`,
+    [id, newCheckIn, newCheckOut, newRoomId]
+  );
+
+  // Recompute totals for room charge if invoice exists & dates changed
+  const nights = Math.max(1, Math.round((new Date(newCheckOut) - new Date(newCheckIn)) / (1000 * 60 * 60 * 24)));
+  const newTotal = Math.max(0, nights * Number(room.rows[0].price_per_night) - Number(resv.discount || 0));
+  await pool.query(
+    `UPDATE invoices SET subtotal=$2, total=$3 WHERE reservation_id=$1 AND invoice_type='HOTEL'`,
+    [id, newTotal, newTotal]
+  );
+
+  await audit(req.user?.id, 'UPDATE_RESERVATION_DATES', 'reservations', id, {
+    old_check_in: resv.check_in_date, new_check_in: newCheckIn,
+    old_check_out: resv.check_out_date, new_check_out: newCheckOut,
+  });
+  res.json({ success: true, data: rows[0] });
 });

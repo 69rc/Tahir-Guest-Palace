@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   BedDouble, Wallet, LogIn, LogOut, AlertTriangle, CalendarCheck2,
   Receipt, Building2, UtensilsCrossed, ChevronRight, Clock,
+  Flower2, Scissors, Waves, CalendarDays, DoorOpen,
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -10,12 +11,15 @@ import {
 } from 'recharts';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { Badge, Card, CardHeader, Stat, PageLoader, EmptyState } from '../../components/ui/index.jsx';
 import { naira, fmtDate, fmtDateTime, STATUS_COLORS } from '../../utils/format.js';
+import { PERM } from '../../utils/permissions.js';
 
 const PIE_COLORS = ['#0e9f6e', '#1c64f2', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
 
 export default function DashboardPage() {
+  const { canAccess } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const toast = useToast();
@@ -37,7 +41,7 @@ export default function DashboardPage() {
   if (loading) return <PageLoader label="Loading dashboard…" />;
   if (!data) return <EmptyState title="Could not load dashboard" message="Refresh the page to try again." />;
 
-  const { rooms, today, revenue, lowStock, recentReservations, recentPayments, recentOrders, charts, housekeeping } = data;
+  const { rooms, today, revenue, outletSales, events, upcomingEvents, lowStock, recentReservations, recentPayments, recentOrders, charts, housekeeping } = data;
 
   const revChart = (charts.revenueOverTime || []).map((r) => ({
     day: r.day,
@@ -60,12 +64,16 @@ export default function DashboardPage() {
           <p className="text-sm text-ink-500 mt-0.5">Overview of Tahir Guest Palace operations</p>
         </div>
         <div className="flex gap-2">
-          <Link to="/checkin" className="btn-primary">
-            <LogIn size={16} /> Check-in
-          </Link>
-          <Link to="/restaurants/pos" className="btn-secondary">
-            <UtensilsCrossed size={16} /> POS
-          </Link>
+          {canAccess(PERM.CHECKIN_VIEW) && (
+            <Link to="/checkin" className="btn-primary">
+              <LogIn size={16} /> Check-in
+            </Link>
+          )}
+          {canAccess(PERM.POS_USE) && (
+            <Link to="/restaurants/pos" className="btn-secondary">
+              <UtensilsCrossed size={16} /> POS
+            </Link>
+          )}
         </div>
       </div>
 
@@ -98,6 +106,38 @@ export default function DashboardPage() {
           icon={AlertTriangle}
           color={Number(revenue.outstanding) > 0 ? 'amber' : 'green'}
           sub="Unsettled guest folios"
+        />
+      </div>
+
+      {/* Services & Events Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat
+          label="Spa Revenue"
+          value={naira(revenue.spa_revenue)}
+          icon={Flower2}
+          color="purple"
+          sub="Spa services"
+        />
+        <Stat
+          label="Barbershop Revenue"
+          value={naira(revenue.barbershop_revenue)}
+          icon={Scissors}
+          color="brand"
+          sub="Grooming services"
+        />
+        <Stat
+          label="Pool / Amenity Revenue"
+          value={naira(revenue.pool_revenue)}
+          icon={Waves}
+          color="blue"
+          sub="Pool & amenity charges"
+        />
+        <Stat
+          label="Event Revenue"
+          value={naira(events.event_revenue)}
+          icon={CalendarDays}
+          color="amber"
+          sub={`${events.upcoming_events} upcoming · ${events.halls_in_use} halls in use`}
         />
       </div>
 
@@ -170,47 +210,54 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Room Status" subtitle="Housekeeping snapshot" />
-          <div className="p-4">
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {[
-                { label: 'Available', value: rooms.AVAILABLE, color: 'bg-green-500' },
-                { label: 'Occupied', value: rooms.OCCUPIED, color: 'bg-blue-500' },
-                { label: 'Reserved', value: rooms.RESERVED, color: 'bg-amber-500' },
-                { label: 'Cleaning', value: rooms.CLEANING, color: 'bg-violet-500' },
-                { label: 'Maintenance', value: rooms.MAINTENANCE, color: 'bg-red-500' },
-              ].map((s) => (
-                <div key={s.label} className="flex items-center gap-3 p-3 rounded-lg bg-ink-50">
-                  <span className={`w-3 h-3 rounded-full ${s.color}`} />
-                  <div>
-                    <p className="text-lg font-bold text-ink-900 leading-none">{s.value}</p>
-                    <p className="text-xs text-ink-500">{s.label}</p>
+          <CardHeader
+            title="Upcoming Events"
+            action={
+              <Link to="/events" className="text-xs font-semibold text-brand-600 hover:underline flex items-center gap-1">
+                View all <ChevronRight size={14} />
+              </Link>
+            }
+          />
+          <div className="divide-y divide-ink-100">
+            {!upcomingEvents || upcomingEvents.length === 0 ? (
+              <EmptyState title="No upcoming events" message="Events will appear here once booked." />
+            ) : (
+              upcomingEvents.map((ev) => (
+                <div key={ev.id} className="flex items-center gap-3 px-5 py-3">
+                  <div className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                    <DoorOpen size={18} />
                   </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-ink-800 truncate">{ev.customer_name}</p>
+                    <p className="text-xs text-ink-500 truncate">
+                      {ev.hall_name} · {fmtDate(ev.event_date)} · {ev.start_time?.slice(0, 5)}
+                    </p>
+                  </div>
+                  <Badge status={ev.status}>{ev.status}</Badge>
                 </div>
-              ))}
-            </div>
-            {lowStock.length > 0 && (
-              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5 mb-2">
-                  <AlertTriangle size={14} /> Low stock alert
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {lowStock.slice(0, 4).map((i) => (
-                    <span key={i.id} className="text-xs bg-white border border-amber-200 rounded-full px-2.5 py-1 text-amber-800">
-                      {i.name} · {i.quantity} {i.unit}
-                    </span>
-                  ))}
-                  {lowStock.length > 4 && (
-                    <Link to="/inventory/low-stock" className="text-xs font-semibold text-amber-700 underline">
-                      +{lowStock.length - 4} more
-                    </Link>
-                  )}
-                </div>
-              </div>
+              ))
             )}
           </div>
         </Card>
       </div>
+
+      {/* Outlet Sales */}
+      {outletSales && outletSales.length > 0 && (
+        <Card>
+          <CardHeader title="Food & Beverage by Outlet" subtitle="Total sales by restaurant/outlet" />
+          <div className="p-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {outletSales.map((o, i) => (
+                <div key={o.id || i} className="p-3 rounded-lg bg-ink-50">
+                  <p className="text-xs text-ink-500 truncate">{o.name}</p>
+                  <p className="text-lg font-bold text-ink-900">{naira(o.total)}</p>
+                  <span className="text-[10px] font-medium text-ink-400 uppercase">{o.outlet_type || 'RESTAURANT'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Lists */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

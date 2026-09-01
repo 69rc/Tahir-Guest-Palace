@@ -21,7 +21,9 @@ async function clean() {
     'purchase_items', 'purchases', 'inventory_transactions', 'inventory_items', 'inventory_categories', 'suppliers',
     'order_items', 'orders', 'menu_items', 'menu_categories', 'restaurant_tables', 'restaurants',
     'housekeeping_tasks', 'check_outs', 'check_ins', 'reservations', 'rooms', 'room_types', 'guests',
-    'audit_logs', 'users', 'role_permissions', 'permissions', 'roles',
+    'event_booking_services', 'event_bookings', 'event_services', 'conference_halls',
+    'service_transactions', 'service_appointments', 'amenity_services', 'amenities',
+    'staff_restaurants', 'audit_logs', 'users', 'role_permissions', 'permissions', 'roles',
   ];
   for (const t of tables) {
     await pool.query(`TRUNCATE ${t} RESTART IDENTITY CASCADE`);
@@ -41,15 +43,24 @@ async function seed() {
 
   // ============ ROLES ============
   const roles = [
-    ['ADMIN', 'Full system access'],
+    ['SUPER_ADMIN', 'Unrestricted system access'],
+    ['ADMIN', 'Full system access (legacy, treated as super admin)'],
     ['GENERAL_MANAGER', 'Oversees all hotel operations'],
     ['MANAGER', 'Department manager'],
     ['RECEPTIONIST', 'Front desk and reservations'],
     ['RESTAURANT_MANAGER', 'Manages restaurant operations'],
     ['RESTAURANT_STAFF', 'Restaurant POS and orders'],
     ['ACCOUNTANT', 'Finance and reporting'],
+    ['CASHIER', 'Cashier shift, payments and receipts'],
     ['STOREKEEPER', 'Inventory and purchases'],
-    ['HOUSEKEEPING', 'Housekeeping staff'],
+    ['HOUSEKEEPING', 'Housekeeping staff (legacy)'],
+    ['HOUSEKEEPING_SUPERVISOR', 'Supervises housekeeping tasks and inspections'],
+    ['HOUSEKEEPING_STAFF', 'Assigned housekeeping tasks'],
+    ['MAINTENANCE_SUPERVISOR', 'Supervises maintenance tickets and technicians'],
+    ['MAINTENANCE_STAFF', 'Maintenance and facility staff'],
+    ['SPA_STAFF', 'Spa services operations'],
+    ['BARBERSHOP_STAFF', 'Barbershop services operations'],
+    ['EVENT_MANAGER', 'Conference and events operations'],
   ];
   const roleId = {};
   for (const [name, desc] of roles) {
@@ -57,24 +68,79 @@ async function seed() {
     roleId[name] = r.rows[0].id;
   }
 
+  // ============ PERMISSIONS & ROLE → PERMISSION ============
+  // Seed the DB permissions + role_permissions from the canonical definition.
+  // This makes the database the source of truth (supports custom roles + backend enforcement).
+  const { ALL_PERMISSIONS, ROLE_PERMISSIONS } = await import('../config/permissions.js');
+  const permId = {};
+  for (const code of ALL_PERMISSIONS) {
+    const p = await pool.query('INSERT INTO permissions (code) VALUES ($1) ON CONFLICT (code) DO NOTHING RETURNING id', [code]);
+    if (p.rows.length) permId[code] = p.rows[0].id;
+  }
+  // Fetch id for any permission codes already present.
+  const permRows = await pool.query('SELECT id, code FROM permissions');
+  for (const pr of permRows.rows) permId[pr.code] = pr.id;
+  for (const roleName of Object.keys(ROLE_PERMISSIONS)) {
+    const rid = roleId[roleName];
+    if (!rid) continue;
+    for (const code of ROLE_PERMISSIONS[roleName]) {
+      await pool.query(
+        'INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [rid, permId[code]]
+      );
+    }
+  }
+
   // ============ USERS ============
+  // Demo users — DEVELOPMENT ONLY. Passwords are dev placeholders (admin123).
   const adminHash = await bcrypt.hash('admin123', 10);
   const users = [
-    ['Admin', 'admin', 'admin@tahirpalace.com', '08000000001', roleId.ADMIN],
-    ['GM Hassan', 'gm', 'gm@tahirpalace.com', '08000000002', roleId.GENERAL_MANAGER],
-    ['Receiptionist Amina', 'reception', 'receiption@tahirpalace.com', '08000000003', roleId.RECEPTIONIST],
-    ['Restaurant Manager Dan', 'restman', 'restman@tahirpalace.com', '08000000004', roleId.RESTAURANT_MANAGER],
-    ['POS Staff Kabir', 'pos', 'pos@tahirpalace.com', '08000000005', roleId.RESTAURANT_STAFF],
-    ['Accountant Zainab', 'account', 'account@tahirpalace.com', '08000000006', roleId.ACCOUNTANT],
-    ['Storekeeper Bello', 'store', 'store@tahirpalace.com', '08000000007', roleId.STOREKEEPER],
-    ['Housekeeping Halima', 'hskeeper', 'hk@tahirpalace.com', '08000000008', roleId.HOUSEKEEPING],
+    ['System Admin', 'admin', 'admin@tahir.local', '08000000000', roleId.SUPER_ADMIN],
+    ['Super Admin', 'superadmin', 'superadmin@tahir.local', '08000000001', roleId.SUPER_ADMIN],
+    ['GM Hassan', 'gm', 'manager@tahir.local', '08000000002', roleId.GENERAL_MANAGER],
+    ['Receptionist Amina', 'reception', 'reception@tahir.local', '08000000003', roleId.RECEPTIONIST],
+    ['Manager Kabir', 'manager', 'manager.desk@tahir.local', '08000000004', roleId.MANAGER],
+    ['Restaurant Manager Dan', 'restman', 'restaurant@tahir.local', '08000000005', roleId.RESTAURANT_MANAGER],
+    ['POS Staff Kabir', 'pos', 'restaurant.staff@tahir.local', '08000000006', roleId.RESTAURANT_STAFF],
+    ['Accountant Zainab', 'account', 'accountant@tahir.local', '08000000007', roleId.ACCOUNTANT],
+    ['Storekeeper Bello', 'store', 'storekeeper@tahir.local', '08000000008', roleId.STOREKEEPER],
+    ['Housekeeping Halima', 'hskeeper', 'housekeeping@tahir.local', '08000000009', roleId.HOUSEKEEPING],
+    ['Maintenance Usman', 'maint', 'maintenance@tahir.local', '08000000010', roleId.MAINTENANCE_STAFF],
+    ['Spa Staff Fatima', 'spa', 'spa@tahir.local', '08000000011', roleId.SPA_STAFF],
+    ['Barber Aminu', 'barber', 'barbershop@tahir.local', '08000000012', roleId.BARBERSHOP_STAFF],
+    ['Event Manager Ngozi', 'events', 'events@tahir.local', '08000000013', roleId.EVENT_MANAGER],
+    ['Cashier Sani', 'cash', 'cashier@tahir.local', '08000000014', roleId.CASHIER],
+    ['Housekeeping Sup Aisha', 'hksup', 'hksupervisor@tahir.local', '08000000015', roleId.HOUSEKEEPING_SUPERVISOR],
+    ['Housekeeping Staff Hauwa', 'hkstaff', 'hkstaff@tahir.local', '08000000016', roleId.HOUSEKEEPING_STAFF],
+    ['Maintenance Sup Yusuf', 'mantsup', 'maintsupervisor@tahir.local', '08000000017', roleId.MAINTENANCE_SUPERVISOR],
   ];
   const userId = {};
+  const userKey = {
+    [roleId.SUPER_ADMIN]: 'superadmin',
+    [roleId.ADMIN]: 'admin',
+    [roleId.GENERAL_MANAGER]: 'gm',
+    [roleId.MANAGER]: 'manager',
+    [roleId.RECEPTIONIST]: 'reception',
+    [roleId.RESTAURANT_MANAGER]: 'restman',
+    [roleId.RESTAURANT_STAFF]: 'pos',
+    [roleId.ACCOUNTANT]: 'account',
+    [roleId.STOREKEEPER]: 'store',
+    [roleId.HOUSEKEEPING]: 'hskeeper',
+    [roleId.MAINTENANCE_STAFF]: 'maint',
+    [roleId.SPA_STAFF]: 'spa',
+    [roleId.BARBERSHOP_STAFF]: 'barber',
+    [roleId.EVENT_MANAGER]: 'events',
+    [roleId.CASHIER]: 'cash',
+    [roleId.HOUSEKEEPING_SUPERVISOR]: 'hksup',
+    [roleId.HOUSEKEEPING_STAFF]: 'hkstaff',
+    [roleId.MAINTENANCE_SUPERVISOR]: 'mantsup',
+  };
   for (const [n, u, e, ph, rid] of users) {
+    const deptMap = { [roleId.SUPER_ADMIN]: 'ADMIN', [roleId.ADMIN]: 'ADMIN', [roleId.GENERAL_MANAGER]: 'HOTEL', [roleId.MANAGER]: 'HOTEL', [roleId.RECEPTIONIST]: 'HOTEL', [roleId.RESTAURANT_MANAGER]: 'RESTAURANT', [roleId.RESTAURANT_STAFF]: 'RESTAURANT', [roleId.ACCOUNTANT]: 'ADMIN', [roleId.CASHIER]: 'FINANCE', [roleId.STOREKEEPER]: 'STORE', [roleId.HOUSEKEEPING]: 'HOUSEKEEPING', [roleId.HOUSEKEEPING_SUPERVISOR]: 'HOUSEKEEPING', [roleId.HOUSEKEEPING_STAFF]: 'HOUSEKEEPING', [roleId.MAINTENANCE_SUPERVISOR]: 'MAINTENANCE', [roleId.MAINTENANCE_STAFF]: 'MAINTENANCE', [roleId.SPA_STAFF]: 'SPA', [roleId.BARBERSHOP_STAFF]: 'BARBERSHOP', [roleId.EVENT_MANAGER]: 'EVENTS' };
     const r = await pool.query(
-      'INSERT INTO users (full_name, username, email, phone, password_hash, role_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-      [n, u, e, ph, adminHash, rid]);
-    userId[u] = r.rows[0].id;
+      'INSERT INTO users (full_name, username, email, phone, password_hash, role_id, department, last_login) VALUES ($1,$2,$3,$4,$5,$6,$7,now()) RETURNING id',
+      [n, u, e, ph, adminHash, rid, deptMap[rid] || null]);
+    userId[userKey[rid] || u] = r.rows[0].id;
   }
 
   // ============ ROOM TYPES ============
@@ -142,9 +208,43 @@ async function seed() {
   const res2 = await pool.query(`INSERT INTO restaurants (name, description, tax_rate, service_charge) VALUES ('Tahir Garden Café & Lounge','Outdoor café & lounge with coffee, light meals and bar, serving a blend of local and international favourites',5,8) RETURNING id`);
   const r1 = res1.rows[0].id, r2 = res2.rows[0].id;
 
+  // Additional food & beverage outlets (for the 4-outlet management view)
+  const res3 = await pool.query(`INSERT INTO restaurants (name, description, tax_rate, service_charge, outlet_type, can_charge_room) VALUES ('Tahir Poolside Grill','Poolside dining & drinks at Tahir Facilities swimming pool',5,8,'POOLSIDE',TRUE) RETURNING id`);
+  const res4 = await pool.query(`INSERT INTO restaurants (name, description, tax_rate, service_charge, outlet_type, can_charge_room) VALUES ('Frosty Pops & Gelateria','Ice cream parlour & gelateria - handcrafted gelato, sundaes, milkshakes and frozen treats',5,8,'GELATERIA',TRUE) RETURNING id`);
+  const r3 = res3.rows[0].id, r4 = res4.rows[0].id;
+
+  // Poolside + Frosty Pops menus
+  const cp = await pool.query('INSERT INTO menu_categories (restaurant_id, name) VALUES ($1,$2) RETURNING id', [r3, 'Poolside Drinks']);
+  const cp2 = await pool.query('INSERT INTO menu_categories (restaurant_id, name) VALUES ($1,$2) RETURNING id', [r3, 'Poolside Snacks']);
+  const cp3 = await pool.query('INSERT INTO menu_categories (restaurant_id, name) VALUES ($1,$2) RETURNING id', [r3, 'Grilled Items']);
+  const poolItems = [
+    ['Fresh Coconut Water', 1500, cp.rows[0].id], ['Beach Smoothie', 2500, cp.rows[0].id],
+    ['Margarita', 6000, cp.rows[0].id], ['Poolside Fries', 2000, cp2.rows[0].id],
+    ['Fruit Platter', 3500, cp2.rows[0].id], ['BBQ Skewers', 5000, cp3.rows[0].id],
+    ['Grilled Fish', 8000, cp3.rows[0].id], ['Chicken Shawarma', 4500, cp2.rows[0].id],
+    ['Chapman', 3000, cp.rows[0].id], ['Ice Cold Zobo', 1500, cp.rows[0].id],
+  ];
+  for (const [name, price, cid] of poolItems) {
+    await pool.query('INSERT INTO menu_items (restaurant_id, category_id, name, price, cost) VALUES ($1,$2,$3,$4,$5)', [r3, cid, name, price, Math.round(price * 0.45)]);
+  }
+  const cg = await pool.query('INSERT INTO menu_categories (restaurant_id, name) VALUES ($1,$2) RETURNING id', [r4, 'Frozen Treats']);
+  const cg2 = await pool.query('INSERT INTO menu_categories (restaurant_id, name) VALUES ($1,$2) RETURNING id', [r4, 'Milkshakes']);
+  const cg3 = await pool.query('INSERT INTO menu_categories (restaurant_id, name) VALUES ($1,$2) RETURNING id', [r4, 'Waffles & Crepes']);
+  const gelatoItems = [
+    ['Vanilla Gelato (2 scoops)', 2500, cg.rows[0].id], ['Chocolate Gelato (2 scoops)', 2500, cg.rows[0].id],
+    ['Mango Sorbet', 3000, cg.rows[0].id], ['Strawberry Sundae', 4500, cg.rows[0].id],
+    ['Pistachio Gelato (2 scoops)', 3000, cg.rows[0].id], ['Cookies & Cream', 3000, cg.rows[0].id],
+    ['Chocolate Milkshake', 2500, cg2.rows[0].id], ['Strawberry Milkshake', 2500, cg2.rows[0].id],
+    ['Vanilla Milkshake', 2500, cg2.rows[0].id], ['Mango Smoothie Bowl', 3500, cg2.rows[0].id],
+    ['Belgian Waffle', 3500, cg3.rows[0].id], ['Nutella Crepe', 4000, cg3.rows[0].id],
+  ];
+  for (const [name, price, cid] of gelatoItems) {
+    await pool.query('INSERT INTO menu_items (restaurant_id, category_id, name, price, cost) VALUES ($1,$2,$3,$4,$5)', [r4, cid, name, price, Math.round(price * 0.45)]);
+  }
+
   // Tables
   const tables = [];
-  for (const [rid, prefix, count] of [[r1, 'T', 8], [r2, 'C', 6]]) {
+  for (const [rid, prefix, count] of [[r1, 'T', 8], [r2, 'C', 6], [r3, 'P', 6], [r4, 'F', 4]]) {
     for (let i = 1; i <= count; i++) {
       const tn = i <= 4 ? `${prefix}${i}` : (i === count - 1 ? `VIP ${prefix}${i}` : `${prefix}${i}`);
       const t = await pool.query('INSERT INTO restaurant_tables (restaurant_id, table_number, capacity, status) VALUES ($1,$2,$3,$4) RETURNING id', [rid, tn, i % 2 === 0 ? 4 : 2, 'AVAILABLE']);
@@ -425,6 +525,52 @@ async function seed() {
     }
   }
 
+  // ============ POOLSIDE & FROSTY POPS ORDERS ============
+  for (const [rest, prefix] of [[r3, 'P'], [r4, 'F']]) {
+    for (let i = 0; i < 12; i++) {
+      const t = await pool.query('SELECT * FROM restaurant_tables WHERE restaurant_id=$1 ORDER BY random() LIMIT 1', [rest]);
+      const tid = t.rows[0].id;
+      const nItems = randInt(1, 3);
+      let subtotal = 0;
+      const lines = [];
+      for (let j = 0; j < nItems; j++) {
+        const mi = await pool.query('SELECT * FROM menu_items WHERE restaurant_id=$1 ORDER BY random() LIMIT 1', [rest]);
+        const qty = randInt(1, 2);
+        subtotal += Number(mi.rows[0].price) * qty;
+        lines.push({ mi: mi.rows[0], qty });
+      }
+      const restRow = await pool.query('SELECT * FROM restaurants WHERE id=$1', [rest]);
+      const tax = subtotal * Number(restRow.rows[0].tax_rate) / 100;
+      const total = subtotal + tax;
+      const isOpen = Math.random() < 0.1;
+      const status = isOpen ? 'OPEN' : 'PAID';
+      const created = ts(daysAgo(randInt(0, 14)));
+      const o = await pool.query(
+        `INSERT INTO orders (order_no, restaurant_id, table_id, status, subtotal, tax, total, payment_method, is_charged_to_room, created_at, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [gen('ORD'), rest, tid, status, subtotal, tax, total, isOpen ? null : rand(['CASH', 'POS']), false, created, userId.pos]);
+      for (const l of lines) {
+        await pool.query(
+          `INSERT INTO order_items (order_id, menu_item_id, item_name, quantity, unit_price, line_total)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [o.rows[0].id, l.mi.id, l.mi.name, l.qty, l.mi.price, l.mi.price * l.qty]);
+      }
+      if (status === 'PAID') {
+        const inv = await pool.query(
+          `INSERT INTO invoices (invoice_no, guest_id, order_id, invoice_type, subtotal, tax, total, paid, balance, status)
+           VALUES ($1,null,$2,'RESTAURANT',$3,$4,$5,$5,0,'PAID') RETURNING *`,
+          [gen('INV'), o.rows[0].id, subtotal, tax, total]);
+        await pool.query(
+          `INSERT INTO payments (payment_no, order_id, invoice_id, amount, method, category, note, created_at, received_by)
+           VALUES ($1,$2,$3,$4,$5,'RESTAURANT','Outlet sale',$6,$7)`,
+          [gen('PAY'), o.rows[0].id, inv.rows[0].id, total, rand(['CASH', 'POS']), created, userId.pos]);
+        await pool.query("UPDATE restaurant_tables SET status='AVAILABLE' WHERE id=$1", [tid]);
+      } else {
+        await pool.query("UPDATE restaurant_tables SET status='OCCUPIED' WHERE id=$1", [tid]);
+      }
+    }
+  }
+
   // ============ CHARGE-TO-ROOM EXAMPLE: Ahmed Musa (Room 204) ============
   // Explicitly create Ahmed Musa so the demo scenario is guaranteed.
   // (Room 204 was excluded from the random reservation loop above.)
@@ -463,12 +609,164 @@ async function seed() {
     `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note, received_by)
      VALUES ($1,$2,$3,$4,100000,'TRANSFER','ROOM','Deposit - Bank transfer',$5)`,
     [gen('PAY'), ahmedId, aRes.rows[0].id, aInv.rows[0].id, userId.reception]);
-  // Restaurant charge on folio
+  // Restaurant charge on folio (prior day's meal charged to the room)
   await pool.query(
     `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
-     VALUES ($1,'Restaurant order ORD-XXXX — Jollof Rice × 2, Grilled Chicken × 2, Soft Drink × 3',1,15000,15000)`,
+     VALUES ($1,'Room service — Jollof Rice × 2, Grilled Chicken × 2, Soft Drink × 3',1,15000,15000)`,
     [aInv.rows[0].id]);
   await pool.query(`UPDATE invoices SET subtotal=subtotal+15000, total=total+15000, balance=total-paid WHERE id=$1`, [aInv.rows[0].id]);
+  // Frosty Pops charge on folio (gelato & milkshake for the family)
+  await pool.query(
+    `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
+     VALUES ($1,'Frosty Pops — Vanilla Gelato × 2, Chocolate Milkshake × 2',1,10000,10000)`,
+    [aInv.rows[0].id]);
+  await pool.query(`UPDATE invoices SET subtotal=subtotal+10000, total=total+10000, balance=total-paid WHERE id=$1`, [aInv.rows[0].id]);
+
+  // ============ AMENITIES & SERVICES ============
+  const amenityDefs = [
+    ['Tahir Facilities Swimming Pool', 'POOL', 'Outdoor swimming pool with cabanas and poolside service', 'ACTIVE',
+     'Ground floor - east wing', '6:00 AM - 10:00 PM', 5000, 'PAID', 24],
+    ['Tahir Fitness Center', 'FITNESS', 'Modern gym with cardio, free weights and personal training', 'ACTIVE',
+     'Ground floor - fitness wing', '5:00 AM - 10:00 PM', 3000, 'PAID', 30],
+    ['Tahir Serenity Spa', 'SPA', 'Full-service wellness spa - massages, facials and body treatments', 'ACTIVE',
+     'First floor - wellness wing', '9:00 AM - 9:00 PM', 20000, 'PAID', 12],
+    ['Tahir Barbershop', 'BARBERSHOP', 'Classic barbershop - cuts, shaves and grooming', 'ACTIVE',
+     'Ground floor - near lobby', '8:00 AM - 8:00 PM', 5000, 'PAID', 8],
+  ];
+  const amenityId = {};
+  for (const [name, cat, desc, status, loc, hours, price, ptype, cap] of amenityDefs) {
+    const r = await pool.query(
+      `INSERT INTO amenities (name, category, description, status, location, operating_hours, price, pricing_type, capacity)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [name, cat, desc, status, loc, hours, price, ptype, cap]);
+    amenityId[cat] = r.rows[0].id;
+  }
+
+  // Services per amenity
+  const svcDefs = [
+    [amenityId.POOL, 'Lounge Chair & Towel', 5000, 120, 4],
+    [amenityId.POOL, 'Private Cabana (4hr)', 15000, 240, 4],
+    [amenityId.POOL, 'Private Cabana (Full Day)', 25000, 480, 4],
+    [amenityId.FITNESS, 'Day Pass', 3000, 240, 30],
+    [amenityId.FITNESS, 'Personal Training Session', 8000, 60, 1],
+    [amenityId.SPA, 'Swedish Massage (60min)', 20000, 60, 1],
+    [amenityId.SPA, 'Deep Tissue Massage (60min)', 25000, 60, 1],
+    [amenityId.SPA, 'Aromatherapy Massage (90min)', 30000, 90, 1],
+    [amenityId.SPA, 'Facial Treatment', 18000, 45, 1],
+    [amenityId.BARBERSHOP, 'Haircut', 5000, 30, 4],
+    [amenityId.BARBERSHOP, 'Haircut & Beard Trim', 7000, 45, 4],
+    [amenityId.BARBERSHOP, 'Royal Shave', 8000, 30, 2],
+  ];
+  const serviceId = {};
+  for (const [aid, name, price, dur, cap] of svcDefs) {
+    const r = await pool.query(
+      `INSERT INTO amenity_services (amenity_id, name, price, pricing_type, duration_min, capacity, status)
+       VALUES ($1,$2,$3,'FIXED',$4,$5,'ACTIVE') RETURNING id`, [aid, name, price, dur, cap]);
+    serviceId[name] = r.rows[0].id;
+  }
+
+  // SPA charge-to-room example for Ahmed Musa on Room 204 folio (demo flow)
+  const spaNow = new Date(); spaNow.setDate(spaNow.getDate() - 1); spaNow.setHours(15, 0, 0, 0);
+  const spaEnd = new Date(spaNow); spaEnd.setHours(16, 0, 0, 0);
+  const spaAppt = await pool.query(
+    `INSERT INTO service_appointments (appointment_no, amenity_id, service_id, guest_id, staff_user_id, customer_name, start_time, end_time, price, status, is_charged_to_room, payment_status)
+     VALUES ($1,$2,$3,$4,$5,'Ahmed Musa',$6,$7,20000,'COMPLETED',TRUE,'CHARGED') RETURNING id`,
+    [gen('SAP'), amenityId.SPA, serviceId['Swedish Massage (60min)'], ahmedId, userId.reception, ts(spaNow), ts(spaEnd)]);
+  // Add SPA charge line to Ahmed's existing folio + EVENT/SPA revenue representation on folio
+  await pool.query(
+    `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
+     VALUES ($1,'SPA — Tahir Serenity Spa - Swedish Massage (60min) appointment',1,20000,20000)`,
+    [aInv.rows[0].id]);
+  await pool.query(`UPDATE invoices SET subtotal=subtotal+20000, total=total+20000, balance=balance+20000 WHERE id=$1`, [aInv.rows[0].id]);
+  await pool.query(
+    `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, service_appointment_id, amount, method, category, note, received_by)
+     VALUES ($1,$2,$3,$4,$5,20000,'POS','SPA','Spa massage charged to room folio',$6)`,
+    [gen('PAY'), ahmedId, aRes.rows[0].id, aInv.rows[0].id, spaAppt.rows[0].id, userId.reception]);
+
+  // Barbershop + pool (cabana) appointments for random walk-in guests
+  const walkInGuests = await pool.query("SELECT id FROM guests WHERE full_name<>'Ahmed Musa' LIMIT 2");
+  for (let i = 0; i < walkInGuests.rows.length; i++) {
+    const g = walkInGuests.rows[i].id;
+    const day = new Date(); day.setDate(day.getDate() - (i + 1)); day.setHours(11, 0 + i * 2, 0, 0);
+    const end = new Date(day); end.setHours(day.getHours() + 1);
+    if (i === 0) {
+      await pool.query(
+        `INSERT INTO service_appointments (appointment_no, amenity_id, service_id, guest_id, staff_user_id, customer_name, start_time, end_time, price, status, payment_status)
+         VALUES ($1,$2,$3,$4,$5,'Walk-in',$6,$7,5000,'COMPLETED','PAID') RETURNING id`,
+        [gen('SAP'), amenityId.BARBERSHOP, serviceId['Haircut'], g, userId.reception, ts(day), ts(end)]);
+    } else {
+      await pool.query(
+        `INSERT INTO service_appointments (appointment_no, amenity_id, service_id, guest_id, staff_user_id, customer_name, start_time, end_time, price, status, payment_status)
+         VALUES ($1,$2,$3,$4,$5,'Walk-in',$6,$7,15000,'COMPLETED','PAID') RETURNING id`,
+        [gen('SAP'), amenityId.POOL, serviceId['Private Cabana (4hr)'], g, userId.reception, ts(day), ts(end)]);
+    }
+  }
+
+  // ============ CONFERENCE & EVENTS ============
+  const hallDefs = ['Conference Hall 1', 'Conference Hall 2', 'Conference Hall 3', 'Conference Hall 4', 'Conference Hall 5', 'Conference Hall 6', 'Conference Hall 7', 'Conference Hall 8'];
+  const hallId = {};
+  for (const name of hallDefs) {
+    const r = await pool.query(
+      `INSERT INTO conference_halls (name, capacity, location, description, rate, rate_type, status)
+       VALUES ($1,$2,'Conference Centre', $3,$4,'DAILY','AVAILABLE') RETURNING id`,
+      [name, 120, `${name} - full AV, seating, AC`, randInt(150000, 350000)]);
+    hallId[name] = r.rows[0].id;
+  }
+
+  const evSvcDefs = [
+    ['Standard Catering (per head)', 'Buffet catering service', 8500, 'head'],
+    ['Premium Catering (per head)', 'Premium buffet with live stations', 12000, 'head'],
+    ['Projector & Screen', 'Full HD projector with screen', 30000, 'session'],
+    ['Sound System', 'PA system with microphones', 40000, 'session'],
+    ['Stage Setup', 'Stage, podium and backdrop', 25000, 'event'],
+    ['Table & Chair Rental', 'Per table of 10', 8000, 'table'],
+  ];
+  const evSvcId = {};
+  for (const [name, desc, price, unit] of evSvcDefs) {
+    const r = await pool.query(`INSERT INTO event_services (name, description, price, unit) VALUES ($1,$2,$3,$4) RETURNING id`, [name, desc, price, unit]);
+    evSvcId[name] = r.rows[0].id;
+  }
+
+  // Conference Hall 3 - Eze & Sons corporate conference with catering (demo flow)
+  const evDate = new Date(); evDate.setDate(evDate.getDate() + 7);
+  const evStart = '09:00', evEnd = '17:00';
+  const attendees = 80;
+  const hall3 = hallId['Conference Hall 3'];
+  const hallRow = await pool.query(`SELECT * FROM conference_halls WHERE id=$1`, [hall3]);
+  const hallRate = Number(hallRow.rows[0].rate);
+  const catering = 8500 * attendees;
+  const cateringLine = catering;
+  const evTotal = hallRate + cateringLine;
+  const evDeposit = 100000;
+  const evb = await pool.query(
+    `INSERT INTO event_bookings (booking_no, customer_name, organization, phone, email, hall_id, event_type, event_date, start_time, end_time, attendees, rate, discount, deposit, balance, payment_status, restaurant_id, invoiced_amount, status, notes, created_by)
+     VALUES ($1,'Mr. Chinedu Eze','Eze & Sons Ltd','08070000001','events@ezesons.com',$2,'Conference',$3,$4,$5,$6,$7,0,$8,$9,'PARTIAL',$10,$11,'CONFIRMED','Corporate strategy conference with full-day catering',$12) RETURNING *`,
+    [gen('EVT'), hall3, dateStr(evDate), evStart, evEnd, attendees, hallRate, evDeposit, evTotal - evDeposit, r2, evTotal, userId.gm]);
+  const evBookingId = evb.rows[0].id;
+  // Event services lines
+  const lines = [
+    ['Standard Catering (per head)', attendees, 8500, catering],
+    ['Projector & Screen', 1, 30000, 30000],
+    ['Sound System', 1, 40000, 40000],
+  ];
+  for (const [sname, qty, up, line] of lines) {
+    await pool.query(
+      `INSERT INTO event_booking_services (booking_id, service_id, service_name, quantity, unit_price, line_total)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [evBookingId, evSvcId[sname], sname, qty, up, line]);
+  }
+  const evInv = await pool.query(
+    `INSERT INTO invoices (invoice_no, invoice_type, subtotal, total, paid, balance, status)
+     VALUES ($1,'EVENT',$2,$2,$3,$4,'PARTIAL') RETURNING *`,
+    [gen('INV'), evTotal, evDeposit, evTotal - evDeposit]);
+  await pool.query(`UPDATE event_bookings SET invoice_id=$1 WHERE id=$2`, [evInv.rows[0].id, evBookingId]);
+  await pool.query(
+    `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
+     VALUES ($1,'Conference Hall 3 (Eze & Sons) - venue, catering & AV',1,$2,$2)`,
+    [evInv.rows[0].id, evTotal]);
+  await pool.query(
+    `INSERT INTO payments (payment_no, event_booking_id, invoice_id, amount, method, category, note, received_by)
+     VALUES ($1,$2,$3,$4,'TRANSFER','EVENT','Event deposit - bank transfer',$5)`,
+    [gen('PAY'), evBookingId, evInv.rows[0].id, evDeposit, userId.account]);
 
   // ============ EXPENSES ============
   const expCats = ['Food supplies', 'Electricity', 'Water', 'Maintenance', 'Salaries', 'Cleaning', 'Other'];
@@ -509,11 +807,77 @@ async function seed() {
   const roomsWithStatus = await pool.query('SELECT id, room_number, status FROM rooms');
   for (const rm of roomsWithStatus.rows) {
     const hkStatus = rm.status === 'CLEANING' ? 'CLEANING' : (rm.status === 'OCCUPIED' ? 'DIRTY' : 'CLEAN');
+    const taskStatus = (hkStatus === 'CLEAN' || hkStatus === 'INSPECTED') ? 'COMPLETED' : (hkStatus === 'CLEANING' ? 'IN_PROGRESS' : 'PENDING');
     const completed = (hkStatus === 'CLEAN' || hkStatus === 'INSPECTED') ? new Date() : null;
     await pool.query(
-      `INSERT INTO housekeeping_tasks (room_id, status, assigned_to, completed_at)
-       VALUES ($1,$2,$3,$4)`,
-      [rm.id, hkStatus, userId.hskeeper, completed]);
+      `INSERT INTO housekeeping_tasks (room_id, status, task_status, priority, assigned_to, completed_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [rm.id, hkStatus, taskStatus, rand(['LOW', 'MEDIUM', 'HIGH']), userId.hskeeper, completed]);
+  }
+
+  // ============ MAINTENANCE TICKETS (demo) ============
+  const maintDefs = [
+    ['Air conditioning not cooling', 'ROOM', 'AC_REPAIR', 'HIGH', 'OPEN', 'Room 208'],
+    ['Leaking toilet', 'ROOM', 'PLUMBING', 'MEDIUM', 'IN_PROGRESS', 'Room 304'],
+    ['Pool pump failure', 'POOL', 'EQUIPMENT', 'CRITICAL', 'OPEN', 'Pool area'],
+    ['Broken window in hall', 'CONFERENCE_HALL', 'FACILITY', 'MEDIUM', 'WAITING_PARTS', 'Conference Hall 3'],
+    ['Kitchen refrigerator noise', 'KITCHEN', 'EQUIPMENT', 'LOW', 'ASSIGNED', 'Main kitchen'],
+  ];
+  const maintTicket = {};
+  for (const [desc, facility, cat, priority, status, loc] of maintDefs) {
+    const roomMatch = await pool.query('SELECT id FROM rooms WHERE room_number=$1', [loc.split(/[ ]/).pop()]);
+    const roomRow = (status === 'OPEN' && priority === 'CRITICAL') ? null : null;
+    const roomId = (cat === 'ROOM' || cat === 'CONFERENCE_HALL') ? (await pool.query('SELECT id FROM rooms WHERE room_number=$1 LIMIT 1', [loc.split(/Room |Hall /).pop() || null])).rows[0]?.id : null;
+    const t = await pool.query(
+      `INSERT INTO maintenance_tickets (ticket_no, location, room_id, facility, problem_category, description, reported_by, assigned_to, priority, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [gen('MT'), loc, roomId, facility, cat, desc, userId.reception, priority === 'LOW' || priority === 'MEDIUM' ? userId.maint : null, priority, status]);
+    maintTicket[t.rows[0].ticket_no] = t.rows[0].id;
+  }
+
+  // ============ CASHIER SHIFTS (demo) ============
+  for (let i = 0; i < 3; i++) {
+    const opening = randInt(50000, 150000);
+    const closed = await pool.query(
+      `INSERT INTO cashier_shifts (shift_no, staff_user_id, opening_cash, total_transactions, status, opened_at, closed_at, notes)
+       VALUES ($1,$2,$3,$4,'CLOSED',now()-($5||' days')::interval,now()-($5||' days')::interval + interval '9 hours','Demo closed shift') RETURNING *`,
+      [gen('SHIFT'), userId.account, opening, randInt(5, 30), i + 1]);
+  }
+
+  // ============ GUEST PREFERENCES (demo for Ahmed Musa / guests) ============
+  const someGuest = await pool.query('SELECT id, full_name FROM guests LIMIT 5');
+  for (const g of someGuest.rows) {
+    await pool.query(
+      `INSERT INTO guest_preferences (guest_id, room_preference, bed_preference, smoking_preference, food_preferences, special_requests)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [g.id, 'High floor with a view', 'King', 'Non-smoking', 'Vegetarian options', 'Late checkout if possible']);
+  }
+
+  // ============ RESTAURANT STAFF ASSIGNMENTS & TEST ACCOUNTS ============
+  // One staff account per outlet (dev credentials: restaurant1..restaurant4 / admin123).
+  const restStaffDefs = [
+    ['Restaurant 1 Staff', 'restaurant1', 'restaurant1@test.local', '08000001001', r1],
+    ['Restaurant 2 Staff', 'restaurant2', 'restaurant2@test.local', '08000001002', r2],
+    ['Restaurant 3 Staff', 'restaurant3', 'restaurant3@test.local', '08000001003', r3],
+    ['Restaurant 4 Staff', 'restaurant4', 'restaurant4@test.local', '08000001004', r4],
+  ];
+  for (const [name, uname, email, phone, rid] of restStaffDefs) {
+    const u = await pool.query(
+      `INSERT INTO users (full_name, username, email, phone, password_hash, role_id, department)
+       VALUES ($1,$2,$3,$4,$5,$6,'RESTAURANT') RETURNING id`,
+      [name, uname, email, phone, adminHash, roleId.RESTAURANT_STAFF]);
+    await pool.query(
+      `INSERT INTO staff_restaurants (staff_id, restaurant_id, is_primary) VALUES ($1,$2,TRUE)`,
+      [u.rows[0].id, rid]);
+  }
+  // Assign the existing demo POS staff user (pos) to Restaurant 2.
+  if (userId.pos) {
+    await pool.query(`INSERT INTO staff_restaurants (staff_id, restaurant_id, is_primary) VALUES ($1,$2,TRUE) ON CONFLICT DO NOTHING`, [userId.pos, r2]);
+  }
+  // Assign the existing demo Restaurant Manager (restman) to Restaurants 1 & 2.
+  if (userId.restman) {
+    await pool.query(`INSERT INTO staff_restaurants (staff_id, restaurant_id, is_primary) VALUES ($1,$2,TRUE) ON CONFLICT DO NOTHING`, [userId.restman, r1]);
+    await pool.query(`INSERT INTO staff_restaurants (staff_id, restaurant_id, is_primary) VALUES ($1,$2,FALSE) ON CONFLICT DO NOTHING`, [userId.restman, r2]);
   }
 
   console.log('✅ Seed complete.');

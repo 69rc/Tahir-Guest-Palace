@@ -1,6 +1,38 @@
 import pool from '../config/db.js';
 import { genNumber } from '../utils/common.js';
 
+// Recompute an invoice's subtotal / total / balance / status from its persisted
+// line items and payments so numbers never drift out of sync.
+// Accepts an optional client so it can run inside the caller's transaction.
+export async function reconcileInvoice(ref, invoiceId) {
+  const db = ref || pool;
+  const lines = await db.query(
+    `SELECT COALESCE(SUM(line_total), 0) AS subtotal FROM invoice_items WHERE invoice_id=$1`,
+    [invoiceId]
+  );
+  const payments = await db.query(
+    `SELECT COALESCE(SUM(amount), 0) AS paid FROM payments WHERE invoice_id=$1`,
+    [invoiceId]
+  );
+  const subtotal = Number(lines.rows[0].subtotal);
+  const paid = Number(payments.rows[0].paid);
+  const inv = await db.query(`SELECT discount, tax FROM invoices WHERE id=$1`, [invoiceId]);
+  const discount = Number(inv.rows[0]?.discount || 0);
+  const tax = Number(inv.rows[0]?.tax || 0);
+  const total = Math.max(0, subtotal - discount + tax);
+  const balance = Math.max(0, total - paid);
+  const status =
+    total <= 0.01 ? 'UNPAID'
+    : balance <= 0.01 ? 'PAID'
+    : paid > 0 ? 'PARTIAL'
+    : 'UNPAID';
+  await db.query(
+    `UPDATE invoices SET subtotal=$2, total=$3, balance=$4, status=$5 WHERE id=$1`,
+    [invoiceId, subtotal, total, balance, status]
+  );
+  return { subtotal, total, discount, tax, paid, balance, status };
+}
+
 // Build a guest's unified folio: room charges, restaurant, other services, payments.
 export async function getGuestFolio(guestId) {
   const invoices = await pool.query(
@@ -14,6 +46,7 @@ export async function getGuestFolio(guestId) {
 
   const rows = invoices.rows;
   let roomTotal = 0, restaurantTotal = 0, otherTotal = 0;
+  let spaTotal = 0, barbershopTotal = 0, amenityTotal = 0, eventTotal = 0;
 
   const items = [];
   for (const inv of rows) {
@@ -24,9 +57,22 @@ export async function getGuestFolio(guestId) {
     for (const li of lines.rows) {
       const desc = (li.description || '').toUpperCase();
       let bucket = 'OTHER';
-      if (desc.includes('ROOM') || desc.includes('NIGHT') || desc.includes('STAY')) bucket = 'ROOM';
-      else if (desc.includes('RESTAURANT') || desc.includes('JOLLOF') || desc.includes('CHICKEN') ||
-               desc.includes('DRINK') || desc.includes('MEAL') || desc.includes('ORDER')) bucket = 'RESTAURANT';
+      // Restaurant / room-service items first (they contain meal keywords)
+      if (desc.includes('JOLLOF') || desc.includes('CHICKEN') || desc.includes('DRINK') ||
+          desc.includes('MEAL') || desc.includes('ORDER') || desc.includes('RESTAURANT') ||
+          desc.includes('ROOM SERVICE') || desc.includes('FOOD') || desc.includes('PASTA')) {
+        bucket = 'RESTAURANT';
+      } else if (desc.includes('ROOM') || desc.includes('NIGHT') || desc.includes('STAY')) {
+        bucket = 'ROOM';
+      } else if (desc.includes('SPA')) {
+        bucket = 'SPA';
+      } else if (desc.includes('BARBER')) {
+        bucket = 'BARBERSHOP';
+      } else if (desc.includes('POOL') || desc.includes('CABANA') || desc.includes('FITNESS') || desc.includes('GYM')) {
+        bucket = 'AMENITY';
+      } else if (desc.includes('EVENT') || desc.includes('CONFERENCE')) {
+        bucket = 'EVENT';
+      }
       items.push({
         type: bucket,
         description: li.description,
@@ -47,8 +93,12 @@ export async function getGuestFolio(guestId) {
   roomTotal = charges.ROOM || 0;
   restaurantTotal = charges.RESTAURANT || 0;
   otherTotal = charges.OTHER || 0;
+  spaTotal = charges.SPA || 0;
+  barbershopTotal = charges.BARBERSHOP || 0;
+  amenityTotal = charges.AMENITY || 0;
+  eventTotal = charges.EVENT || 0;
 
-  const totalCharges = roomTotal + restaurantTotal + otherTotal;
+  const totalCharges = roomTotal + restaurantTotal + otherTotal + spaTotal + barbershopTotal + amenityTotal + eventTotal;
   const totalPaid = payments.rows.reduce((s, p) => s + Number(p.amount), 0);
   const balance = totalCharges - totalPaid;
 
@@ -58,6 +108,10 @@ export async function getGuestFolio(guestId) {
     roomTotal,
     restaurantTotal,
     otherTotal,
+    spaTotal,
+    barbershopTotal,
+    amenityTotal,
+    eventTotal,
     totalCharges,
     payments: payments.rows,
     totalPaid,
@@ -66,34 +120,15 @@ export async function getGuestFolio(guestId) {
 }
 
 // Create/update an invoice item line and refresh invoice totals + balance
-export async function addInvoiceLine(invoiceId, description, amount) {
-  const up = await pool.query(
-    `UPDATE invoices SET subtotal = subtotal + $2, total = total + $2
-     WHERE id = $1 RETURNING *`,
-    [invoiceId, amount]
-  );
-  const inv = up.rows[0];
-  if (inv) {
-    await pool.query(
-      `UPDATE invoices SET balance = total - paid
-       WHERE id = $1`,
-      [invoiceId]
-    );
-    await pool.query(
-      `UPDATE invoices SET status = CASE
-         WHEN total <= 0 THEN 'UNPAID'
-         WHEN paid >= total THEN 'PAID'
-         WHEN paid > 0 THEN 'PARTIAL'
-         ELSE 'UNPAID' END
-       WHERE id = $1`,
-      [invoiceId]
-    );
-  }
-  await pool.query(
+export async function addInvoiceLine(client, invoiceId, description, amount, quantity = 1) {
+  const db = client || pool;
+  await db.query(
     `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
-     VALUES ($1,$2,1,$3,$3)`,
-    [invoiceId, description, amount]
+     VALUES ($1,$2,$3,$4,$5)`,
+    [invoiceId, description, quantity, Number(amount) / Number(quantity), Number(amount)]
   );
+  await reconcileInvoice(db, invoiceId);
+  const up = await db.query(`SELECT * FROM invoices WHERE id=$1`, [invoiceId]);
   return up.rows[0];
 }
 

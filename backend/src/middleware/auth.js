@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken';
 import pool from '../config/db.js';
 import { ApiError } from '../utils/helpers.js';
+import { SUPER_ROLES } from '../config/permissions.js';
+import { getUserPermissionCodes } from '../utils/permissionService.js';
 
 export function signToken(user) {
   return jwt.sign(
@@ -24,14 +26,16 @@ export async function protect(req, _res, next) {
     const { rows } = await pool.query(
       `SELECT u.*, r.name AS role_name FROM users u
        LEFT JOIN roles r ON r.id = u.role_id
-       WHERE u.id = $1 AND u.is_active = TRUE`,
+       WHERE u.id = $1 AND u.status = 'ACTIVE'`,
       [decoded.id]
     );
-    if (rows.length === 0) throw new ApiError(401, 'User no longer active.');
+    if (rows.length === 0) throw new ApiError(401, 'User is inactive, suspended or not found.');
     const user = rows[0];
     if (decoded.role && decoded.role !== user.role_name) {
       // stale token role, refresh by re-signing on next request via protected
     }
+    // Load effective permissions from the DB (source of truth).
+    user.permissions = await getUserPermissionCodes(user);
     req.user = user;
     req.token = token;
     next();
@@ -43,9 +47,26 @@ export async function protect(req, _res, next) {
 export function requireRole(...roles) {
   return (req, _res, next) => {
     if (!req.user) return next(new ApiError(401, 'Not authenticated.'));
-    if (!roles.includes(req.user.role_name) && req.user.role_name !== 'ADMIN') {
+    if (!roles.includes(req.user.role_name) && !SUPER_ROLES.includes(req.user.role_name)) {
       return next(new ApiError(403, 'You do not have permission to access this resource.'));
     }
     next();
   };
 }
+
+// Require ANY of the given permission codes for the request.
+// Uses the DB-derived permission set attached at `protect`.
+// SUPER_ADMIN / ADMIN bypass and are always allowed.
+export function required(...codes) {
+  return (req, _res, next) => {
+    if (!req.user) return next(new ApiError(401, 'Not authenticated.'));
+    const role = req.user.role_name;
+    if (SUPER_ROLES.includes(role)) return next();
+    const allowed = req.user.permissions || [];
+    if (!codes.some((c) => allowed.includes(c))) {
+      return next(new ApiError(403, 'You do not have permission to access this resource.'));
+    }
+    next();
+  };
+}
+

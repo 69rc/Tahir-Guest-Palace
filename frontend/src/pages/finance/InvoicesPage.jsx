@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { FileText, Eye } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { FileText, Eye, Printer } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table } from '../../components/ui/index.jsx';
@@ -50,7 +51,10 @@ export default function InvoicesPage() {
     { key: 'balance', label: 'Balance', align: 'right', render: (i) => <span className="font-bold">{naira(i.balance)}</span> },
     { key: 'status', label: 'Status', render: (i) => <Badge status={i.status}>{i.status}</Badge> },
     { key: 'actions', label: '', render: (i) => (
-      <div className="flex justify-end"><Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openDetail(i); }}><Eye size={15} /></Button></div>
+      <div className="flex justify-end gap-1">
+        <Link to={`/finance/invoices/${i.id}/print`} className="btn-ghost !p-2" title="Print invoice"><Printer size={15} /></Link>
+        <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openDetail(i); }}><Eye size={15} /></Button>
+      </div>
     ) },
   ];
 

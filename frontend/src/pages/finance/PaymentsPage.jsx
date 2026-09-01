@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Wallet, Plus } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Wallet, Plus, Printer } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Badge, Card, Button, Modal, PageLoader, EmptyState, SearchInput, Table } from '../../components/ui/index.jsx';
@@ -59,6 +60,9 @@ export default function PaymentsPage() {
     { key: 'category', label: 'Category', render: (p) => <Badge status={p.category === 'RESTAURANT' ? 'OPEN' : 'PAID'}>{p.category}</Badge> },
     { key: 'received_by_name', label: 'Received By', render: (p) => p.received_by_name || '—' },
     { key: 'created_at', label: 'Date', render: (p) => fmtDateTime(p.created_at) },
+    { key: 'receipt', label: '', align: 'right', render: (p) => (
+      <Link to={`/finance/payments/${p.id}/receipt`} className="btn-ghost !p-2" title="Print receipt"><Printer size={15} /></Link>
+    ) },
   ];
 
   if (loading) return <PageLoader />;

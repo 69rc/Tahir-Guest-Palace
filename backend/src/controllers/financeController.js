@@ -29,10 +29,17 @@ export const createPayment = asyncHandler(async (req, res) => {
          ORDER BY created_at DESC LIMIT 1`, [guest_id]);
       if (open.rows.length) invId = open.rows[0].id;
     }
+
+    // Auto-assign to cashier's open shift if present
+    const openShift = await client.query(
+      `SELECT id FROM cashier_shifts WHERE staff_user_id=$1 AND status='OPEN' LIMIT 1`, [req.user?.id]
+    );
+    const shiftId = openShift.rows.length ? openShift.rows[0].id : null;
+
     const payment = await client.query(
-      `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note, received_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [genNumber('PAY'), guest_id || null, reservation_id || null, invId || null, amount, method, category || 'ROOM', note, req.user?.id]);
+      `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note, received_by, shift_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [genNumber('PAY'), guest_id || null, reservation_id || null, invId || null, amount, method, category || 'ROOM', note, req.user?.id, shiftId]);
     if (invId) {
       await client.query(`UPDATE invoices SET paid=paid+$2 WHERE id=$1`, [invId, amount]);
       await client.query(
@@ -60,6 +67,20 @@ export const getInvoices = asyncHandler(async (req, res) => {
      LEFT JOIN rooms rm ON rm.id=r.room_id
      ORDER BY i.created_at DESC LIMIT 200`);
   res.json({ success: true, data: rows });
+});
+
+export const getPaymentById = asyncHandler(async (req, res) => {
+  const p = await pool.query(
+    `SELECT p.*, g.full_name AS guest_name, g.phone AS guest_phone, g.email AS guest_email,
+            inv.invoice_no, u.full_name AS cashier_name, ord.order_no
+     FROM payments p
+     LEFT JOIN guests g ON g.id=p.guest_id
+     LEFT JOIN invoices inv ON inv.id=p.invoice_id
+     LEFT JOIN users u ON u.id=p.received_by
+     LEFT JOIN orders ord ON ord.id=p.order_id
+     WHERE p.id=$1`, [req.params.id]);
+  if (p.rows.length === 0) throw new ApiError(404, 'Payment not found.');
+  res.json({ success: true, data: p.rows[0] });
 });
 
 export const getInvoice = asyncHandler(async (req, res) => {
@@ -126,8 +147,12 @@ export const getRevenue = asyncHandler(async (req, res) => {
 
   const total = await pool.query(
     `SELECT COALESCE(SUM(p.amount),0) AS total,
-            COALESCE(SUM(p.amount) FILTER (WHERE p.category IN ('ROOM','OTHER')),0) AS hotel,
-            COALESCE(SUM(p.amount) FILTER (WHERE p.category='RESTAURANT'),0) AS restaurant
+            COALESCE(SUM(p.amount) FILTER (WHERE p.category IN ('ROOM','EVENT','OTHER','SPA','BARBERSHOP','AMENITY')),0) AS hotel,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.category='RESTAURANT'),0) AS restaurant,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.category='SPA'),0) AS spa,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.category='BARBERSHOP'),0) AS barbershop,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.category='AMENITY'),0) AS amenity,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.category='EVENT'),0) AS event
      FROM payments p ${whereSql}`, params);
 
   const byCategory = await pool.query(

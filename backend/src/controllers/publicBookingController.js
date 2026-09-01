@@ -88,3 +88,49 @@ export const publicBooking = asyncHandler(async (req, res) => {
     data: { reservation_no: resv.rows[0].reservation_no, total, nights, rate },
   });
 });
+
+// ---------- PUBLIC AMENITIES ----------
+export const publicAmenities = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT id, name, category, description, status, location, operating_hours, price, pricing_type, capacity, image
+     FROM amenities WHERE status='ACTIVE' ORDER BY id`);
+  res.json({ success: true, data: rows });
+});
+
+export const publicAmenityServices = asyncHandler(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT s.id, s.name, s.description, s.price, s.pricing_type, s.duration_min, s.capacity, s.image
+     FROM amenity_services s
+     LEFT JOIN amenities a ON a.id=s.amenity_id
+     WHERE s.amenity_id=$1 AND s.status='ACTIVE' ORDER BY s.id`, [req.params.amenityId]);
+  res.json({ success: true, data: rows });
+});
+
+// ---------- PUBLIC CONFERENCE HALLS ----------
+export const publicConferenceHalls = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT id, name, capacity, location, description, rate, rate_type, facilities, status
+     FROM conference_halls WHERE status IN ('AVAILABLE','RESERVED') ORDER BY id`);
+  res.json({ success: true, data: rows });
+});
+
+export const publicEventInquiry = asyncHandler(async (req, res) => {
+  const { customer_name, organization, phone, email, hall_id, event_type, event_date, start_time, end_time, attendees, notes } = req.body;
+  if (!customer_name || !hall_id || !event_date) throw new ApiError(400, 'Name, hall and date required.');
+
+  const hall = await pool.query(`SELECT * FROM conference_halls WHERE id=$1`, [hall_id]);
+  if (hall.rows.length === 0) throw new ApiError(404, 'Conference hall not found.');
+
+  const { rows } = await pool.query(
+    `INSERT INTO event_bookings (booking_no, customer_name, organization, phone, email, hall_id, event_type, event_date, start_time, end_time, attendees, rate, status, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'INQUIRY',$13) RETURNING *`,
+    [genNumber('EVT'), customer_name, organization || null, phone || null, email || null, hall_id,
+     event_type || 'Other', event_date, start_time || '09:00', end_time || '17:00', attendees || 0,
+     hall.rows[0].rate || 0, notes || null]);
+
+  res.status(201).json({
+    success: true,
+    message: 'Event inquiry submitted. Our events team will contact you shortly.',
+    data: { booking_no: rows[0].booking_no, hall: hall.rows[0].name },
+  });
+});

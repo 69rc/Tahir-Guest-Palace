@@ -2,10 +2,14 @@ import { useEffect, useState } from 'react';
 import { Calculator, TrendingUp, TrendingDown, FileText, AlertTriangle } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { Card, CardHeader, PageLoader, EmptyState, Stat } from '../../components/ui/index.jsx';
 import { naira, fmtDate } from '../../utils/format.js';
+import { PERM } from '../../utils/permissions.js';
 
 export default function FinancialReportsPage() {
+  const { canAccess } = useAuth();
+  const hasRestaurant = canAccess(PERM.RESTAURANT_REPORTS_VIEW);
   const [accounting, setAccounting] = useState(null);
   const [restReport, setRestReport] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -14,22 +18,23 @@ export default function FinancialReportsPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [a, r] = await Promise.all([api.get('/finance/accounting'), api.get('/reports/restaurant')]);
+        const [a] = await Promise.all([api.get('/finance/accounting')]);
         setAccounting(a.data);
-        setRestReport(r.data);
       } catch (e) {
         toast.error(e.message);
-      } finally {
-        setLoading(false);
       }
+      if (hasRestaurant) {
+        try { const r = await api.get('/reports/restaurant'); setRestReport(r.data); } catch { /* optional */ }
+      }
+      setLoading(false);
     };
     load();
-  }, []);
+  }, [hasRestaurant]);
 
   if (loading) return <PageLoader />;
-  if (!accounting || !restReport) return <EmptyState title="No data" />;
+  if (!accounting) return <EmptyState title="No data" />;
 
-  const restaurantRevenue = restReport.byRestaurant.reduce((s, r) => s + Number(r.total), 0);
+  const restaurantRevenue = restReport?.byRestaurant?.reduce((s, r) => s + Number(r.total), 0) || 0;
   const hotelRevenue = accounting.income - restaurantRevenue;
 
   return (
@@ -73,20 +78,22 @@ export default function FinancialReportsPage() {
           </div>
         </Card>
 
-        <Card>
-          <CardHeader title="Restaurant Sales by Outlet" />
-          <div className="divide-y divide-ink-100">
-            {restReport.byRestaurant.map((r) => (
-              <div key={r.name} className="flex items-center justify-between px-5 py-3">
-                <div>
-                  <p className="text-sm font-semibold">{r.name}</p>
-                  <p className="text-xs text-ink-500">{r.orders} completed orders</p>
+        {hasRestaurant && (
+          <Card>
+            <CardHeader title="Restaurant Sales by Outlet" />
+            <div className="divide-y divide-ink-100">
+              {restReport.byRestaurant.map((r) => (
+                <div key={r.name} className="flex items-center justify-between px-5 py-3">
+                  <div>
+                    <p className="text-sm font-semibold">{r.name}</p>
+                    <p className="text-xs text-ink-500">{r.orders} completed orders</p>
+                  </div>
+                  <span className="font-bold">{naira(r.total)}</span>
                 </div>
-                <span className="font-bold">{naira(r.total)}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

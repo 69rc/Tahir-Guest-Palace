@@ -1,31 +1,25 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Plus, Tag } from 'lucide-react';
+import { Tag, Plus, Save, RefreshCw, Trash2, BookOpen } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
+import { useRestaurant } from '../../context/RestaurantContext.jsx';
+import RestaurantSelector from '../../components/restaurant/RestaurantSelector.jsx';
 import { Badge, Card, Button, Modal, PageLoader, EmptyState } from '../../components/ui/index.jsx';
 import { naira } from '../../utils/format.js';
+import { PERM } from '../../utils/permissions.js';
 
 export default function MenuPage() {
-  const [restaurants, setRestaurants] = useState([]);
+  const { canAccess } = useAuth();
+  const { activeRestaurantId, loading: restLoading } = useRestaurant();
   const [menu, setMenu] = useState({ categories: [], items: [] });
-  const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [catOpen, setCatOpen] = useState(false);
   const [itemOpen, setItemOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [catForm, setCatForm] = useState({ restaurant_id: '', name: '', sort_order: 0 });
-  const [itemForm, setItemForm] = useState({ restaurant_id: '', category_id: '', name: '', description: '', price: '', cost: '', is_available: true });
+  const [catForm, setCatForm] = useState({ name: '', sort_order: 0 });
+  const [itemForm, setItemForm] = useState({ category_id: '', name: '', description: '', price: '', cost: '', is_available: true });
   const toast = useToast();
-
-  const loadRestaurants = async () => {
-    try {
-      const res = await api.get('/restaurants');
-      setRestaurants(res.data);
-      if (!selected && res.data.length) setSelected(res.data[0].id);
-    } catch (e) {
-      toast.error(e.message);
-    }
-  };
 
   const loadMenu = async (rid) => {
     if (!rid) { setMenu({ categories: [], items: [] }); setLoading(false); return; }
@@ -40,18 +34,17 @@ export default function MenuPage() {
     }
   };
 
-  useEffect(() => { loadRestaurants(); }, []);
-  useEffect(() => { if (selected) loadMenu(selected); }, [selected]);
+  useEffect(() => { if (activeRestaurantId) loadMenu(activeRestaurantId); }, [activeRestaurantId]);
 
   const submitCategory = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.post('/restaurants/menu-categories', { ...catForm, restaurant_id: selected });
+      await api.post('/restaurants/menu-categories', { ...catForm, restaurant_id: activeRestaurantId });
       toast.success('Category created');
       setCatOpen(false);
-      setCatForm({ restaurant_id: '', name: '', sort_order: 0 });
-      loadMenu(selected);
+      setCatForm({ name: '', sort_order: 0 });
+      loadMenu(activeRestaurantId);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -63,11 +56,11 @@ export default function MenuPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.post('/restaurants/menu-items', { ...itemForm, restaurant_id: selected });
+      await api.post('/restaurants/menu-items', { ...itemForm, restaurant_id: activeRestaurantId });
       toast.success('Menu item created');
       setItemOpen(false);
-      setItemForm({ restaurant_id: '', category_id: '', name: '', description: '', price: '', cost: '', is_available: true });
-      loadMenu(selected);
+      setItemForm({ category_id: '', name: '', description: '', price: '', cost: '', is_available: true });
+      loadMenu(activeRestaurantId);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -80,7 +73,7 @@ export default function MenuPage() {
     items: menu.items.filter((i) => i.category_id === c.id),
   }));
 
-  if (loading) return <PageLoader />;
+  if ((loading && !menu.categories.length && !menu.items.length) || (restLoading && !activeRestaurantId)) return <PageLoader />;
 
   return (
     <div className="space-y-5">
@@ -89,22 +82,17 @@ export default function MenuPage() {
           <h1 className="text-2xl font-bold text-ink-900">Menu</h1>
           <p className="text-sm text-ink-500 mt-0.5">Food & beverage catalogue</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setCatOpen(true)}><Tag size={16} /> Category</Button>
-          <Button onClick={() => setItemOpen(true)}><Plus size={16} /> Menu Item</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <RestaurantSelector />
+          {canAccess(PERM.MENU_MANAGE) && (
+            <>
+              <Button variant="secondary" onClick={() => setCatOpen(true)}><Tag size={16} /> Category</Button>
+              <Button onClick={() => setItemOpen(true)}><Plus size={16} /> Menu Item</Button>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {restaurants.map((r) => (
-          <button key={r.id} onClick={() => setSelected(r.id)}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
-              String(r.id) === String(selected) ? 'bg-brand-600 text-white border-brand-600' : 'bg-white border-ink-200 text-ink-700 hover:bg-ink-50'
-            }`}>
-            {r.name}
-          </button>
-        ))}
-      </div>
 
       {grouped.length === 0 ? (
         <Card><EmptyState title="No menu categories yet" message="Add a category to organize your menu items." /></Card>

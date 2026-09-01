@@ -1,7 +1,10 @@
 import pool from '../config/db.js';
 import { asyncHandler, ApiError } from '../utils/helpers.js';
 import { audit } from '../utils/common.js';
-import { getGuestFolio, getOrCreateFolioInvoice, addInvoiceLine } from '../services/folioService.js';
+import {
+  getGuestFolio, getOrCreateFolioInvoice, addInvoiceLine, reconcileInvoice,
+} from '../services/folioService.js';
+import { genNumber } from '../utils/common.js';
 
 export const getCurrentStays = asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
@@ -123,8 +126,7 @@ export const checkOut = asyncHandler(async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // Ensure room charges are on the folio
-    const folio = await getGuestFolioResv(client, resv.guest_id, resv.id);
+    // Ensure room charges are on the guest's open folio invoice (added at most once).
     const inv = await getOrCreateFolioInvoiceResv(client, resv.guest_id, resv.id);
     const hasRoomLine = await client.query(
       `SELECT 1 FROM invoice_items WHERE invoice_id=$1 AND description ILIKE '%nights%'`,
@@ -132,7 +134,7 @@ export const checkOut = asyncHandler(async (req, res) => {
     );
     const checkin = new Date(resv.checkin_time || resv.check_in_date);
     const nights = Math.max(1, Math.round((new Date() - checkin) / 86400000));
-    const roomCharge = nights * Number(resv.rate);
+    const roomCharge = nights * Number(resv.rate) - Number(resv.discount || 0);
 
     if (hasRoomLine.rows.length === 0 && roomCharge > 0) {
       await client.query(
@@ -140,55 +142,33 @@ export const checkOut = asyncHandler(async (req, res) => {
          VALUES ($1,$2,$3,$4,$4)`,
         [inv.id, `Room ${nights} nights × ₦${Number(resv.rate).toLocaleString()}`, nights, roomCharge]
       );
-      await client.query(
-        `UPDATE invoices SET subtotal=subtotal+$2, total=total+$2 WHERE id=$1`,
-        [inv.id, roomCharge]
-      );
     }
 
     // Apply payment if provided
-    if (amount_paid > 0) {
+    if (Number(amount_paid) > 0) {
       await client.query(
         `INSERT INTO payments (payment_no, guest_id, reservation_id, invoice_id, amount, method, category, note)
          VALUES ($1,$2,$3,$4,$5,$6,'ROOM','Checkout settlement')`,
         [genNumber('PAY'), resv.guest_id, resv.id, inv.id, amount_paid, payment_method || 'CASH']
       );
-      await client.query(`UPDATE invoices SET paid=paid+$2 WHERE id=$1`, [inv.id, amount_paid]);
       paymentApplied = Number(amount_paid);
     }
 
-    // Refresh totals/balance/status
+    // Refresh totals/balance/status from persisted line items and payments
+    await reconcileInvoice(client, inv.id);
+
+    await client.query(
+      `INSERT INTO check_outs (reservation_id, guest_id, room_id, checked_out_by) VALUES ($1,$2,$3,$4)`,
+      [reservation_id, resv.guest_id, resv.room_id, req.user?.id]
+    );
+    await client.query('UPDATE reservations SET status=$2 WHERE id=$1', [reservation_id, 'CHECKED_OUT']);
+    await client.query('UPDATE rooms SET status=$2 WHERE id=$1', [resv.room_id, 'CLEANING']);
     await client.query('COMMIT');
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
   } finally {
     client.release();
-  }
-
-  const client2 = await pool.connect();
-  try {
-    await client2.query('BEGIN');
-    // Recompute balances for all guest invoices
-    const invs = await client2.query('SELECT id FROM invoices WHERE guest_id=$1', [resv.guest_id]);
-    for (const inv of invs.rows) {
-      await client2.query(
-        `UPDATE invoices SET balance = total - paid,
-           status = CASE WHEN total - paid <= 0.01 THEN 'PAID' WHEN paid>0 THEN 'PARTIAL' ELSE 'UNPAID' END
-         WHERE id=$1`, [inv.id]);
-    }
-    await client2.query(
-      `INSERT INTO check_outs (reservation_id, guest_id, room_id, checked_out_by) VALUES ($1,$2,$3,$4)`,
-      [reservation_id, resv.guest_id, resv.room_id, req.user?.id]
-    );
-    await client2.query('UPDATE reservations SET status=$2 WHERE id=$1', [reservation_id, 'CHECKED_OUT']);
-    await client2.query('UPDATE rooms SET status=$2 WHERE id=$1', [resv.room_id, 'CLEANING']);
-    await client2.query('COMMIT');
-  } catch (e) {
-    await client2.query('ROLLBACK');
-    throw e;
-  } finally {
-    client2.release();
   }
 
   await audit(req.user?.id, 'CHECK_OUT', 'reservations', reservation_id, {
@@ -204,17 +184,6 @@ export const checkOut = asyncHandler(async (req, res) => {
 });
 
 // Helper with client for transactions
-async function getGuestFolioResv(client, guestId, resvId) {
-  const invoices = await client.query(
-    `SELECT * FROM invoices WHERE guest_id=$1 ORDER BY created_at`, [guestId]);
-  const payments = await client.query(
-    `SELECT * FROM payments WHERE guest_id=$1`, [guestId]);
-  let total = 0, paid = 0;
-  invoices.rows.forEach((i) => (total += Number(i.total)));
-  payments.rows.forEach((p) => (paid += Number(p.amount)));
-  return { totalCharges: total, totalPaid: paid, balance: total - paid };
-}
-
 async function getOrCreateFolioInvoiceResv(client, guestId, resvId) {
   const existing = await client.query(
     `SELECT * FROM invoices WHERE guest_id=$1 AND status IN ('UNPAID','PARTIAL')
@@ -226,5 +195,3 @@ async function getOrCreateFolioInvoiceResv(client, guestId, resvId) {
     [genNumber('INV'), guestId, resvId]);
   return rows[0];
 }
-
-import { genNumber } from '../utils/common.js';

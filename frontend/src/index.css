@@ -22,6 +22,12 @@ body {
   background: transparent;
 }
 
+@media print {
+  body { background: #fff !important; }
+  aside, header { display: none !important; }
+  main { padding: 0 !important; max-width: 100% !important; }
+}
+
 @layer components {
   .card {
     @apply bg-white rounded-xl shadow-card border border-ink-100;

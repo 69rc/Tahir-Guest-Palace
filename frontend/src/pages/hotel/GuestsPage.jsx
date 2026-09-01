@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Users, Plus, Phone, Mail, MapPin } from 'lucide-react';
+import { Users, Plus, Phone, Mail, MapPin, UserCircle2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { Badge, Card, Button, Modal, SearchInput, PageLoader, EmptyState, Table } from '../../components/ui/index.jsx';
 import { naira, fmtDate, initials } from '../../utils/format.js';
+import { PERM } from '../../utils/permissions.js';
 
 export default function GuestsPage() {
+  const { canAccess } = useAuth();
   const [guests, setGuests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -54,9 +58,9 @@ export default function GuestsPage() {
 
   const openDetail = async (g) => {
     try {
-      const res = await api.get(`/guests/${g.id}`);
+      const [res, folioRes] = await Promise.all([api.get(`/guests/${g.id}`), api.get(`/finance/folio/${g.id}`)]);
       setDetail(g);
-      setDetailData(res.data);
+      setDetailData({ ...res.data, folio: folioRes.data });
     } catch (e) {
       toast.error(e.message);
     }
@@ -89,7 +93,9 @@ export default function GuestsPage() {
           <h1 className="text-2xl font-bold text-ink-900">Guests</h1>
           <p className="text-sm text-ink-500 mt-0.5">{guests.length} guest profiles</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> New Guest</Button>
+        {canAccess(PERM.GUESTS_MANAGE) && (
+          <Button onClick={() => setOpen(true)}><Plus size={16} /> New Guest</Button>
+        )}
       </div>
 
       <Card>
@@ -165,6 +171,11 @@ export default function GuestsPage() {
               </div>
               <Badge>{detailData.outstanding > 0 ? `Owes ${naira(detailData.outstanding)}` : 'Settled'}</Badge>
             </div>
+            {canAccess(PERM.GUEST_360) && (
+              <Link to={`/guests/${detail.id}/360`} className="inline-flex items-center gap-1.5 text-sm text-brand-700 hover:text-brand-800 font-semibold">
+                <UserCircle2 size={16} /> Open Guest 360 →
+              </Link>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
               <div className="flex items-center gap-2 text-ink-600"><Phone size={14} /> {detailData.guest.phone || '—'}</div>
@@ -180,7 +191,7 @@ export default function GuestsPage() {
             )}
 
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-ink-400 mb-2">Ledger</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-ink-400 mb-2">Invoice Ledger</p>
               <div className="rounded-lg border border-ink-100 divide-y divide-ink-100">
                 {detailData.ledger.length === 0 ? (
                   <p className="p-3 text-sm text-ink-500">No invoices yet.</p>
@@ -193,6 +204,50 @@ export default function GuestsPage() {
                 ))}
               </div>
             </div>
+
+            {detailData.folio && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-400 mb-2">Guest Folio</p>
+                <div className="rounded-lg border border-ink-100 divide-y divide-ink-100 text-sm">
+                  {detailData.folio.items.length === 0 && detailData.folio.payments.length === 0 ? (
+                    <p className="p-3 text-ink-500">No folio transactions yet.</p>
+                  ) : (
+                    <>
+                      {[...detailData.folio.items.map((i) => ({ ...i, _kind: 'charge', _date: i.date })),
+                        ...detailData.folio.payments.map((p) => ({ _kind: 'payment', _date: p.created_at, description: `${p.method} payment`, amount: -Number(p.amount) }))]
+                        .sort((a, b) => new Date(a._date) - new Date(b._date))
+                        .map((t, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-3">
+                            <div className="min-w-0 pr-3">
+                              <p className="text-xs text-ink-400">{fmtDate(t._date)} · {t.type || t.category}</p>
+                              <p className="font-medium truncate">{t.description}</p>
+                            </div>
+                            <span className={t._kind === 'payment' ? 'font-semibold text-green-600 shrink-0' : 'font-semibold text-ink-800 shrink-0'}>
+                              {t._kind === 'payment' ? '−' : '+'}{naira(Math.abs(t.amount))}
+                            </span>
+                          </div>
+                        ))}
+                      <div className="flex justify-between p-3 bg-ink-50 font-bold">
+                        <span className="text-ink-600">Outstanding balance</span>
+                        <span className={detailData.folio.balance > 0 ? 'text-amber-600' : 'text-green-600'}>
+                          {detailData.folio.balance > 0 ? naira(detailData.folio.balance) : 'Settled'}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-ink-500">
+                  <span>Room: <b className="text-ink-800">{naira(detailData.folio.roomTotal)}</b></span>
+                  <span>Restaurant: <b className="text-ink-800">{naira(detailData.folio.restaurantTotal)}</b></span>
+                  {detailData.folio.spaTotal > 0 && <span>Spa: <b className="text-ink-800">{naira(detailData.folio.spaTotal)}</b></span>}
+                  {detailData.folio.barbershopTotal > 0 && <span>Barbershop: <b className="text-ink-800">{naira(detailData.folio.barbershopTotal)}</b></span>}
+                  {detailData.folio.amenityTotal > 0 && <span>Pool/Services: <b className="text-ink-800">{naira(detailData.folio.amenityTotal)}</b></span>}
+                  {detailData.folio.eventTotal > 0 && <span>Events: <b className="text-ink-800">{naira(detailData.folio.eventTotal)}</b></span>}
+                  <span>Other: <b className="text-ink-800">{naira(detailData.folio.otherTotal)}</b></span>
+                  <span>Paid: <b className="text-green-600">{naira(detailData.folio.totalPaid)}</b></span>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </Modal>

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CalendarCheck2, Plus } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Badge, Card, Button, Modal, SearchInput, PageLoader, EmptyState, Table } from '../../components/ui/index.jsx';
+import { Badge, Card, CardHeader, Button, Modal, SearchInput, PageLoader, EmptyState, Table } from '../../components/ui/index.jsx';
 import { naira, fmtDate, fmtDateTime } from '../../utils/format.js';
 
 export default function ReservationsPage() {
@@ -14,6 +14,7 @@ export default function ReservationsPage() {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -105,6 +106,21 @@ export default function ReservationsPage() {
 
   if (loading) return <PageLoader />;
 
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const arrivalsToday = reservations.filter((r) => r.check_in_date === todayStr && ['CONFIRMED', 'CHECKED_IN', 'PENDING'].includes(r.status)).length;
+  const departuresToday = reservations.filter((r) => r.check_out_date === todayStr && ['CHECKED_IN'].includes(r.status)).length;
+  const inHouse = reservations.filter((r) => r.status === 'CHECKED_IN').length;
+
+  const future = reservations.filter((r) => ['CONFIRMED', 'CHECKED_IN', 'PENDING'].includes(r.status) && new Date(r.check_out_date) >= new Date(todayStr));
+  const occupancyGrid = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(todayStr);
+    d.setDate(d.getDate() + i);
+    const ds = d.toISOString().slice(0, 10);
+    const onDay = future.filter((r) => r.check_in_date < ds && r.check_out_date > ds).length;
+    occupancyGrid.push({ date: ds, count: onDay });
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -114,6 +130,43 @@ export default function ReservationsPage() {
         </div>
         <Button onClick={() => setOpen(true)}><Plus size={16} /> New Reservation</Button>
       </div>
+
+      {/* Occupancy overview */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="rounded-xl border border-ink-100 p-4 bg-white">
+          <p className="text-xs text-ink-500">Arriving Today</p>
+          <p className="text-2xl font-bold text-ink-900">{arrivalsToday}</p>
+        </div>
+        <div className="rounded-xl border border-ink-100 p-4 bg-white">
+          <p className="text-xs text-ink-500">Departing Today</p>
+          <p className="text-2xl font-bold text-ink-900">{departuresToday}</p>
+        </div>
+        <div className="rounded-xl border border-ink-100 p-4 bg-white">
+          <p className="text-xs text-ink-500">In House</p>
+          <p className="text-2xl font-bold text-ink-900">{inHouse}</p>
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button onClick={() => setShowCalendar((v) => !v)}
+          className="text-sm font-semibold text-brand-600 hover:underline flex items-center gap-1">
+          <CalendarCheck2 size={15} /> {showCalendar ? 'Hide occupancy' : 'Show 14-day occupancy'}
+        </button>
+      </div>
+      {showCalendar && (
+        <Card>
+          <CardHeader title="14-Day Room Occupancy" subtitle="Confirmed / checked-in / pending stays per night" />
+          <div className="p-4 grid grid-cols-7 gap-2">
+            {occupancyGrid.map((d) => (
+              <div key={d.date} className={`rounded-lg p-2 text-center border ${d.count > 0 ? 'bg-brand-50 border-brand-200' : 'bg-ink-50 border-ink-100'}`}>
+                <p className="text-[11px] text-ink-500">{fmtDate(d.date, { day: '2-digit', month: 'short' })}</p>
+                <p className={`text-lg font-bold ${d.count > 0 ? 'text-brand-700' : 'text-ink-400'}`}>{d.count}</p>
+                <p className="text-[10px] text-ink-400">{d.count > 0 ? 'stays' : 'free'}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card>
         <div className="p-4 border-b border-ink-100">

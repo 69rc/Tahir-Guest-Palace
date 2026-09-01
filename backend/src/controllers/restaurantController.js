@@ -2,14 +2,22 @@ import pool from '../config/db.js';
 import { asyncHandler, ApiError } from '../utils/helpers.js';
 import { genNumber, audit } from '../utils/common.js';
 import { consumeOrderStock } from '../services/stockService.js';
+import { reconcileInvoice } from '../services/folioService.js';
+import { assertRestaurantAccess, resolveRestaurantContext, getAssignedRestaurantIds } from '../utils/restaurantAccess.js';
 
 export const getRestaurants = asyncHandler(async (req, res) => {
-  const { rows } = await pool.query(
-    `SELECT r.*, (SELECT COUNT(*) FROM restaurant_tables t WHERE t.restaurant_id=r.id) AS tables_count,
-            (SELECT COUNT(*) FROM orders o WHERE o.restaurant_id=r.id AND o.status IN ('OPEN','PAID')) AS active_orders
-     FROM restaurants r ORDER BY r.id`
-  );
-  res.json({ success: true, data: rows });
+  const { restaurantIds: assigned } = await getAssignedRestaurantIds(req.user);
+  let q = `SELECT r.*, (SELECT COUNT(*) FROM restaurant_tables t WHERE t.restaurant_id=r.id) AS tables_count,
+             (SELECT COUNT(*) FROM orders o WHERE o.restaurant_id=r.id AND o.status IN ('OPEN','PAID')) AS active_orders
+           FROM restaurants r`;
+  const params = [];
+  if (assigned !== null) {
+    params.push(assigned);
+    q += ` WHERE r.id = ANY($1::int[])`;
+  }
+  q += ` ORDER BY r.id`;
+  const { rows } = await pool.query(q, params);
+  res.json({ success: true, data: rows, assigned });
 });
 
 export const createRestaurant = asyncHandler(async (req, res) => {
@@ -36,6 +44,7 @@ export const getTables = asyncHandler(async (req, res) => {
 export const createTable = asyncHandler(async (req, res) => {
   const { restaurant_id, table_number, capacity, status } = req.body;
   if (!restaurant_id || !table_number) throw new ApiError(400, 'Restaurant and table number required.');
+  await assertRestaurantAccess(req.user, restaurant_id);
   const { rows } = await pool.query(
     `INSERT INTO restaurant_tables (restaurant_id, table_number, capacity, status)
      VALUES ($1,$2,$3,$4) RETURNING *`,
@@ -46,9 +55,11 @@ export const createTable = asyncHandler(async (req, res) => {
 
 export const updateTableStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
+  const tbl = await pool.query('SELECT * FROM restaurant_tables WHERE id=$1', [req.params.id]);
+  if (tbl.rows.length === 0) throw new ApiError(404, 'Table not found.');
+  await assertRestaurantAccess(req.user, tbl.rows[0].restaurant_id);
   const { rows } = await pool.query(
     `UPDATE restaurant_tables SET status=$2 WHERE id=$1 RETURNING *`, [req.params.id, status]);
-  if (rows.length === 0) throw new ApiError(404, 'Table not found.');
   res.json({ success: true, data: rows[0] });
 });
 
@@ -66,6 +77,8 @@ export const getMenu = asyncHandler(async (req, res) => {
 
 export const createMenuCategory = asyncHandler(async (req, res) => {
   const { restaurant_id, name, sort_order } = req.body;
+  if (!restaurant_id || !name) throw new ApiError(400, 'Restaurant and category name required.');
+  await assertRestaurantAccess(req.user, restaurant_id);
   const { rows } = await pool.query(
     `INSERT INTO menu_categories (restaurant_id, name, sort_order) VALUES ($1,$2,$3) RETURNING *`,
     [restaurant_id, name, sort_order || 0]);
@@ -75,6 +88,7 @@ export const createMenuCategory = asyncHandler(async (req, res) => {
 export const createMenuItem = asyncHandler(async (req, res) => {
   const { restaurant_id, category_id, name, description, price, cost, is_available } = req.body;
   if (!restaurant_id || !name) throw new ApiError(400, 'Restaurant and item name required.');
+  await assertRestaurantAccess(req.user, restaurant_id);
   const { rows } = await pool.query(
     `INSERT INTO menu_items (restaurant_id, category_id, name, description, price, cost, is_available)
      VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,TRUE)) RETURNING *`,
@@ -84,9 +98,14 @@ export const createMenuItem = asyncHandler(async (req, res) => {
 
 // ---- Orders / POS ----
 export const createOrder = asyncHandler(async (req, res) => {
-  const { restaurant_id, table_id, items, discount } = req.body;
-  if (!restaurant_id || !Array.isArray(items) || items.length === 0)
-    throw new ApiError(400, 'Restaurant and at least one item are required.');
+  const { table_id, items, discount } = req.body;
+  if (!Array.isArray(items) || items.length === 0)
+    throw new ApiError(400, 'At least one item is required.');
+
+  // Derive/validate the restaurant context from the authenticated user.
+  // RESTAURANT_STAFF is always bound to their single assigned restaurant;
+  // the client-supplied value is ignored and never trusted.
+  const restaurant_id = await resolveRestaurantContext(req.user, req.body.restaurant_id);
 
   const restaurant = await pool.query('SELECT * FROM restaurants WHERE id=$1', [restaurant_id]);
   if (restaurant.rows.length === 0) throw new ApiError(404, 'Restaurant not found.');
@@ -147,6 +166,7 @@ export const getOrder = asyncHandler(async (req, res) => {
      FROM orders o LEFT JOIN restaurants res ON res.id=o.restaurant_id
      LEFT JOIN restaurant_tables t ON t.id=o.table_id WHERE o.id=$1`, [req.params.id]);
   if (order.rows.length === 0) throw new ApiError(404, 'Order not found.');
+  await assertRestaurantAccess(req.user, order.rows[0].restaurant_id);
   const items = await pool.query(
     `SELECT * FROM order_items WHERE order_id=$1 ORDER BY id`, [req.params.id]);
   res.json({ success: true, data: { ...order.rows[0], items: items.rows } });
@@ -203,6 +223,7 @@ export const chargeToRoom = asyncHandler(async (req, res) => {
     const order = await client.query('SELECT * FROM orders WHERE id=$1', [order_id]);
     if (order.rows.length === 0) throw new ApiError(404, 'Order not found.');
     if (order.rows[0].is_charged_to_room) throw new ApiError(400, 'Order already charged to a room.');
+    await assertRestaurantAccess(req.user, order.rows[0].restaurant_id);
 
     // attach guest to order
     await client.query(`UPDATE orders SET guest_id=$2, is_charged_to_room=TRUE, status='PAID' WHERE id=$1`, [order_id, gid]);
@@ -232,15 +253,13 @@ export const chargeToRoom = asyncHandler(async (req, res) => {
        VALUES ($1,$2,1,$3,$3)`,
       [invoice.id, `Restaurant order ${order.rows[0].order_no} — ${desc}`, total]
     );
-    // recompute invoice balances properly
-    await client.query(
-      `UPDATE invoices SET subtotal = (SELECT COALESCE(SUM(line_total),0) FROM invoice_items WHERE invoice_id=invoices.id),
-        total = subtotal, balance = subtotal - paid,
-        status = CASE WHEN subtotal <= paid THEN 'PAID' WHEN paid>0 THEN 'PARTIAL' ELSE 'UNPAID' END
-       WHERE id=$1`, [invoice.id]);
+    // rebuild totals/balance from persisted lines + payments
+    await reconcileInvoice(client, invoice.id);
+
+    // Consume stock inside the same transaction so charge + stock stay atomic
+    await consumeOrderStock(order_id, order.rows[0].restaurant_id, req.user?.id, client);
 
     await client.query('COMMIT');
-    await consumeOrderStock(order_id, order.rows[0].restaurant_id, req.user?.id);
     const folio = await getGuestFolio(gid);
     await audit(req.user?.id, 'CHARGE_TO_ROOM', 'orders', order_id, { guest_id: gid, amount: total });
     res.json({ success: true, message: `Bill charged to guest's room folio.`, data: { guest_id: gid, total, folio } });
@@ -257,29 +276,41 @@ export const payOrder = asyncHandler(async (req, res) => {
   const order = await pool.query('SELECT * FROM orders WHERE id=$1', [order_id]);
   if (order.rows.length === 0) throw new ApiError(404, 'Order not found.');
   const o = order.rows[0];
+  await assertRestaurantAccess(req.user, o.restaurant_id);
   if (o.status === 'PAID') throw new ApiError(400, 'Order already paid.');
 
-  const inv = await pool.query(
-    `INSERT INTO invoices (invoice_no, guest_id, order_id, invoice_type, subtotal,discount,tax,total,paid,balance,status)
-     VALUES ($1,$2,$3,'RESTAURANT',$4,$5,$6,$7,$7,0,'PAID') RETURNING *`,
-    [genNumber('INV'), o.guest_id, o.id, o.subtotal, o.discount, o.tax, o.total]
-  );
-  const items = await pool.query(`SELECT * FROM order_items WHERE order_id=$1`, [order_id]);
-  for (const it of items.rows) {
-    await pool.query(
-      `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [inv.rows[0].id, it.item_name, it.quantity, it.unit_price, it.line_total]
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const inv = await client.query(
+      `INSERT INTO invoices (invoice_no, guest_id, order_id, invoice_type, subtotal,discount,tax,total,paid,balance,status)
+       VALUES ($1,$2,$3,'RESTAURANT',$4,$5,$6,$7,$7,0,'PAID') RETURNING *`,
+      [genNumber('INV'), o.guest_id, o.id, o.subtotal, o.discount, o.tax, o.total]
     );
+    const items = await client.query(`SELECT * FROM order_items WHERE order_id=$1`, [order_id]);
+    for (const it of items.rows) {
+      await client.query(
+        `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_total)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [inv.rows[0].id, it.item_name, it.quantity, it.unit_price, it.line_total]
+      );
+    }
+    await client.query(
+      `INSERT INTO payments (payment_no, guest_id, order_id, invoice_id, amount, method, category, note)
+       VALUES ($1,$2,$3,$4,$5,$6,'RESTAURANT','Restaurant order payment')`,
+      [genNumber('PAY'), o.guest_id, o.id, inv.rows[0].id, o.total, method || 'CASH']
+    );
+    await client.query(`UPDATE orders SET status='PAID', payment_method=$2 WHERE id=$1`, [order_id, method || 'CASH']);
+    await client.query(`UPDATE restaurant_tables SET status='AVAILABLE' WHERE id=$1 AND status='OCCUPIED'`, [o.table_id]);
+    // Consume stock inside the same transaction
+    await consumeOrderStock(order_id, o.restaurant_id, req.user?.id, client);
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
   }
-  await pool.query(
-    `INSERT INTO payments (payment_no, guest_id, order_id, invoice_id, amount, method, category, note)
-     VALUES ($1,$2,$3,$4,$5,$6,'RESTAURANT','Restaurant order payment')`,
-    [genNumber('PAY'), o.guest_id, o.id, inv.rows[0].id, o.total, method || 'CASH']
-  );
-  await pool.query(`UPDATE orders SET status='PAID', payment_method=$2 WHERE id=$1`, [order_id, method || 'CASH']);
-  await pool.query(`UPDATE restaurant_tables SET status='AVAILABLE' WHERE id=$1`, [o.table_id]);
-  await consumeOrderStock(order_id, o.restaurant_id, req.user?.id);
   await audit(req.user?.id, 'PAY_ORDER', 'orders', order_id, { method });
   res.json({ success: true, message: 'Order paid.' });
 });

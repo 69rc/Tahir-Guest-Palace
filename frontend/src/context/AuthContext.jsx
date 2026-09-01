@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authApi } from '../services/api.js';
 import { setToken, getToken } from '../services/api.js';
+import { canAccess, SUPER_ROLES } from '../utils/permissions.js';
 
 const AuthContext = createContext(null);
 
@@ -47,11 +48,20 @@ export function AuthProvider({ children }) {
     logout,
     isAuthenticated: !!user,
     is(role) {
-      return user?.role_name === role || user?.role_name === 'ADMIN';
+      return SUPER_ROLES.includes(user?.role_name) || user?.role_name === role;
     },
     can(...roles) {
       if (!user) return false;
-      return roles.includes(user.role_name) || user.role_name === 'ADMIN';
+      if (SUPER_ROLES.includes(user.role_name)) return true;
+      return roles.includes(user.role_name);
+    },
+    canAccess(...codes) {
+      if (!user) return false;
+      if (SUPER_ROLES.includes(user.role_name)) return true;
+      if (Array.isArray(user.permissions) && user.permissions.length > 0) {
+        return codes.some((c) => user.permissions.includes(c));
+      }
+      return canAccess(user.role_name, ...codes);
     },
   };
 

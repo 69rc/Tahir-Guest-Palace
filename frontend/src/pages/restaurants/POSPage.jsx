@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react';
 import { ShoppingCart, Plus, Minus, Trash2, CreditCard, BedDouble, Receipt, Check } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
+import { useRestaurant } from '../../context/RestaurantContext.jsx';
+import RestaurantSelector from '../../components/restaurant/RestaurantSelector.jsx';
 import { Badge, Card, Button, Modal, PageLoader, EmptyState } from '../../components/ui/index.jsx';
 import { naira } from '../../utils/format.js';
+import { PERM } from '../../utils/permissions.js';
 
 export default function POSPage() {
-  const [restaurants, setRestaurants] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const { canAccess } = useAuth();
+  const { activeRestaurantId, loading: restLoading } = useRestaurant();
   const [menu, setMenu] = useState(null);
   const [tables, setTables] = useState([]);
   const [allRooms, setAllRooms] = useState([]);
@@ -25,40 +29,32 @@ export default function POSPage() {
   const [successOrder, setSuccessOrder] = useState(null);
   const toast = useToast();
 
-  const loadRestaurants = async () => {
-    try {
-      const res = await api.get('/restaurants');
-      setRestaurants(res.data);
-      if (!selected && res.data.length) setSelected(res.data[0].id);
-    } catch (e) {
-      toast.error(e.message);
-    }
-  };
-
   const loadData = async (rid) => {
     if (!rid) return;
     setLoading(true);
     try {
-      const [m, t, rooms, guests] = await Promise.all([
+      const [m, t] = await Promise.all([
         api.get(`/restaurants/${rid}/menu`),
         api.get(`/restaurants/${rid}/tables`),
-        api.get('/rooms'),
-        api.get('/guests'),
       ]);
       setMenu(m.data);
       setTables(t.data);
-      setAllRooms(rooms.data);
-      setAllGuests(guests.data);
       if (!activeCat && m.data.categories.length) setActiveCat(m.data.categories[0].id);
     } catch (e) {
       toast.error(e.message);
     } finally {
       setLoading(false);
     }
+    // Extra data needed only for charge-to-room — loaded without blocking the page.
+    if (canAccess(PERM.ROOMS_VIEW)) {
+      try { const r = await api.get('/rooms'); setAllRooms(r.data); } catch { /* optional */ }
+    }
+    if (canAccess(PERM.GUESTS_VIEW)) {
+      try { const g = await api.get('/guests'); setAllGuests(g.data); } catch { /* optional */ }
+    }
   };
 
-  useEffect(() => { loadRestaurants(); }, []);
-  useEffect(() => { if (selected) loadData(selected); }, [selected]);
+  useEffect(() => { if (activeRestaurantId) loadData(activeRestaurantId); }, [activeRestaurantId]);
 
   const addToCart = (item) => {
     setCart((c) => {
@@ -78,12 +74,13 @@ export default function POSPage() {
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
   const activeItems = menu?.items.filter((i) => !activeCat || i.category_id === activeCat) || [];
+  const canCharge = canAccess(PERM.CHARGE_ROOM) && (allRooms.length > 0 || allGuests.length > 0);
 
   const createOrderAndPay = async (action) => {
     setProcessing(true);
     try {
       const created = await api.post('/restaurants/orders', {
-        restaurant_id: selected,
+        restaurant_id: activeRestaurantId,
         table_id: tableId || null,
         items: cart.map(({ menu_item_id, quantity }) => ({ menu_item_id, quantity })),
       });
@@ -108,7 +105,7 @@ export default function POSPage() {
     }
   };
 
-  if (loading && !menu) return <PageLoader />;
+  if ((loading && !menu) || (restLoading && !activeRestaurantId)) return <PageLoader />;
 
   return (
     <div className="space-y-5">
@@ -117,14 +114,7 @@ export default function POSPage() {
           <h1 className="text-2xl font-bold text-ink-900">Point of Sale</h1>
           <p className="text-sm text-ink-500 mt-0.5">Create orders, charge to guest rooms or collect payment</p>
         </div>
-        {restaurants.map((r) => (
-          <button key={r.id} onClick={() => setSelected(r.id)}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
-              String(r.id) === String(selected) ? 'bg-brand-600 text-white border-brand-600' : 'bg-white border-ink-200 hover:bg-ink-50'
-            }`}>
-            {r.name}
-          </button>
-        ))}
+        <RestaurantSelector />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -202,14 +192,20 @@ export default function POSPage() {
                     {tables.filter((t) => t.status === 'AVAILABLE').map((t) => <option key={t.id} value={t.id}>Table {t.table_number}</option>)}
                   </select>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button onClick={() => { setMode('pay'); setCheckoutOpen(true); }}>
-                    <CreditCard size={15} /> Collect
+                {canCharge ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button onClick={() => { setMode('pay'); setCheckoutOpen(true); }}>
+                      <CreditCard size={15} /> Collect
+                    </Button>
+                    <Button variant="secondary" onClick={() => { setMode('room'); setCheckoutOpen(true); }}>
+                      <BedDouble size={15} /> Charge Room
+                    </Button>
+                  </div>
+                ) : (
+                  <Button className="w-full" onClick={() => { setMode('pay'); setCheckoutOpen(true); }}>
+                    <CreditCard size={15} /> Collect Payment
                   </Button>
-                  <Button variant="secondary" onClick={() => { setMode('room'); setCheckoutOpen(true); }}>
-                    <BedDouble size={15} /> Charge Room
-                  </Button>
-                </div>
+                )}
               </div>
             )}
           </Card>

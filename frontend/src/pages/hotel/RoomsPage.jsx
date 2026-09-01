@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import { BedDouble, Plus, Users } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { Badge, Card, Button, Modal, SearchInput, PageLoader, EmptyState } from '../../components/ui/index.jsx';
 import { naira } from '../../utils/format.js';
+import { PERM } from '../../utils/permissions.js';
 
 export default function RoomsPage() {
+  const { canAccess } = useAuth();
   const [rooms, setRooms] = useState([]);
   const [types, setTypes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -20,13 +23,15 @@ export default function RoomsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [r, t] = await Promise.all([api.get('/rooms'), api.get('/rooms/types')]);
-      setRooms(r.data);
-      setTypes(t.data);
+      const res = await api.get('/rooms');
+      setRooms(res.data);
     } catch (e) {
       toast.error(e.message);
     } finally {
       setLoading(false);
+    }
+    if (canAccess(PERM.ROOM_TYPES_VIEW)) {
+      try { const t = await api.get('/rooms/types'); setTypes(t.data); } catch { /* optional */ }
     }
   };
 
@@ -65,7 +70,9 @@ export default function RoomsPage() {
           <h1 className="text-2xl font-bold text-ink-900">Rooms</h1>
           <p className="text-sm text-ink-500 mt-0.5">{rooms.length} rooms in the property</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} /> Add Room</Button>
+        {canAccess(PERM.ROOMS_MANAGE) && (
+          <Button onClick={() => setOpen(true)}><Plus size={16} /> Add Room</Button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">

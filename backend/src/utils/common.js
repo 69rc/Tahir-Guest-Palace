@@ -20,12 +20,13 @@ export function formatDate(d, opts = {}) {
   return date.toLocaleDateString('en-NG', { year: 'numeric', month: 'short', day: 'numeric', ...opts });
 }
 
-export async function audit(userId, action, entityType, entityId, details, ip) {
+export async function audit(userId, action, entityType, entityId, details, ip, oldValue, newValue) {
   try {
     await pool.query(
-      `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [userId || null, action, entityType || null, entityId || null, details ? JSON.stringify(details) : null, ip || null]
+      `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip, old_value, new_value)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [userId || null, action, entityType || null, entityId || null, details ? JSON.stringify(details) : null, ip || null,
+       oldValue != null ? JSON.stringify(oldValue) : null, newValue != null ? JSON.stringify(newValue) : null]
     );
   } catch (e) {
     console.error('Audit log error:', e.message);

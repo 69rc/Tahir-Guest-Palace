@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { pool } from './db.js';
+import { syncPermissionCatalog } from '../utils/permissionService.js';
 
 const schema = `
 
@@ -11,8 +12,11 @@ CREATE TABLE IF NOT EXISTS roles (
   id SERIAL PRIMARY KEY,
   name VARCHAR(50) UNIQUE NOT NULL,
   description TEXT,
+  is_custom BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_custom BOOLEAN DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS permissions (
   id SERIAL PRIMARY KEY,
@@ -35,8 +39,27 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role_id INT REFERENCES roles(id),
   is_active BOOLEAN DEFAULT TRUE,
+  status VARCHAR(20) DEFAULT 'ACTIVE',
+  last_login TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'ACTIVE';
+-- Migrate existing is_active values into status once (ACTIVE if true, INACTIVE if false).
+UPDATE users SET status = CASE WHEN is_active = TRUE THEN 'ACTIVE' ELSE 'INACTIVE' END WHERE status IS NULL;
+
+-- Many-to-many staff-to-restaurant assignment.
+-- Supports RESTAURANT_STAFF (exactly one primary restaurant) and
+-- RESTAURANT_MANAGER (one-or-more restaurants).
+CREATE TABLE IF NOT EXISTS staff_restaurants (
+  staff_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  restaurant_id INT NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  is_primary BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (staff_id, restaurant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_staff_restaurants_restaurant ON staff_restaurants(restaurant_id);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id SERIAL PRIMARY KEY,
@@ -343,10 +366,313 @@ CREATE TABLE IF NOT EXISTS housekeeping_tasks (
   completed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_hk_room ON housekeeping_tasks(room_id);
+
+-- ============ STAFF ASSIGNMENT ============
+ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(50);
+
+-- ============ AMENITIES & SERVICES ============
+-- Top-level facilities (Swimming Pool, Fitness Center, Spa, Barbershop, Frosty Pops, Conference...)
+CREATE TABLE IF NOT EXISTS amenities (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  category VARCHAR(60),
+  description TEXT,
+  status VARCHAR(20) DEFAULT 'ACTIVE',
+  location VARCHAR(150),
+  operating_hours VARCHAR(120),
+  price NUMERIC(12,2) DEFAULT 0,
+  pricing_type VARCHAR(30) DEFAULT 'FREE',
+  capacity INT,
+  image TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_amenities_status ON amenities(status);
+
+-- Configurable services offered by an amenity (spa services, barber services, poolside services)
+CREATE TABLE IF NOT EXISTS amenity_services (
+  id SERIAL PRIMARY KEY,
+  amenity_id INT REFERENCES amenities(id) ON DELETE CASCADE,
+  name VARCHAR(150) NOT NULL,
+  description TEXT,
+  price NUMERIC(12,2) DEFAULT 0,
+  pricing_type VARCHAR(30) DEFAULT 'FIXED',
+  duration_min INT DEFAULT 30,
+  capacity INT,
+  status VARCHAR(20) DEFAULT 'ACTIVE',
+  image TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_amenity_services_amenity ON amenity_services(amenity_id);
+
+-- Reusable bookable service appointments (spa, barbershop, pool cabanas, fitness sessions...)
+CREATE TABLE IF NOT EXISTS service_appointments (
+  id SERIAL PRIMARY KEY,
+  appointment_no VARCHAR(30) UNIQUE NOT NULL,
+  amenity_id INT REFERENCES amenities(id) ON DELETE CASCADE,
+  service_id INT REFERENCES amenity_services(id) ON DELETE SET NULL,
+  guest_id INT REFERENCES guests(id) ON DELETE SET NULL,
+  staff_user_id INT REFERENCES users(id) ON DELETE SET NULL,
+  customer_name VARCHAR(150),
+  start_time TIMESTAMPTZ NOT NULL,
+  end_time TIMESTAMPTZ NOT NULL,
+  price NUMERIC(12,2) DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'BOOKED',
+  payment_status VARCHAR(20) DEFAULT 'UNPAID',
+  is_charged_to_room BOOLEAN DEFAULT FALSE,
+  notes TEXT,
+  created_by INT REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_service_appt_amenity ON service_appointments(amenity_id);
+CREATE INDEX IF NOT EXISTS idx_service_appt_guest ON service_appointments(guest_id);
+CREATE INDEX IF NOT EXISTS idx_service_appt_time ON service_appointments(start_time, end_time);
+
+-- Inventory consumed for service appointments (spa consumables, barber supplies, cabana drinks)
+CREATE TABLE IF NOT EXISTS service_transactions (
+  id SERIAL PRIMARY KEY,
+  appointment_id INT REFERENCES service_appointments(id) ON DELETE CASCADE,
+  item_id INT REFERENCES inventory_items(id) ON DELETE CASCADE,
+  quantity NUMERIC(12,2) DEFAULT 0,
+  note TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_service_txn_appt ON service_transactions(appointment_id);
+
+-- ============ CONFERENCE & EVENTS ============
+CREATE TABLE IF NOT EXISTS conference_halls (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  capacity INT DEFAULT 0,
+  location VARCHAR(150),
+  description TEXT,
+  rate NUMERIC(12,2) DEFAULT 0,
+  rate_type VARCHAR(20) DEFAULT 'DAILY',
+  facilities JSONB,
+  status VARCHAR(20) DEFAULT 'AVAILABLE',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_halls_status ON conference_halls(status);
+
+-- Configurable event services (catering, projector, sound, seating, decoration...)
+CREATE TABLE IF NOT EXISTS event_services (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(150) NOT NULL,
+  description TEXT,
+  price NUMERIC(12,2) DEFAULT 0,
+  unit VARCHAR(40) DEFAULT 'pkg',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS event_bookings (
+  id SERIAL PRIMARY KEY,
+  booking_no VARCHAR(30) UNIQUE NOT NULL,
+  customer_name VARCHAR(150) NOT NULL,
+  organization VARCHAR(150),
+  phone VARCHAR(50),
+  email VARCHAR(150),
+  hall_id INT REFERENCES conference_halls(id),
+  event_type VARCHAR(40),
+  event_date DATE NOT NULL,
+  start_time TIME,
+  end_time TIME,
+  attendees INT DEFAULT 0,
+  rate NUMERIC(12,2) DEFAULT 0,
+  discount NUMERIC(12,2) DEFAULT 0,
+  deposit NUMERIC(12,2) DEFAULT 0,
+  balance NUMERIC(12,2) DEFAULT 0,
+  payment_status VARCHAR(20) DEFAULT 'UNPAID',
+  restaurant_id INT REFERENCES restaurants(id) ON DELETE SET NULL,
+  invoiced_amount NUMERIC(12,2) DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'INQUIRY',
+  notes TEXT,
+  created_by INT REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_event_bookings_date ON event_bookings(event_date);
+CREATE INDEX IF NOT EXISTS idx_event_bookings_hall ON event_bookings(hall_id);
+
+-- Attached services for an event (catering, equipment...) with session price
+CREATE TABLE IF NOT EXISTS event_booking_services (
+  id SERIAL PRIMARY KEY,
+  booking_id INT REFERENCES event_bookings(id) ON DELETE CASCADE,
+  service_id INT REFERENCES event_services(id) ON DELETE SET NULL,
+  service_name VARCHAR(150),
+  quantity NUMERIC(12,2) DEFAULT 1,
+  unit_price NUMERIC(12,2) DEFAULT 0,
+  line_total NUMERIC(12,2) DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_event_bs_booking ON event_booking_services(booking_id);
+
+-- Event bookings may link to a folio-style invoice for payments/revenue
+ALTER TABLE event_bookings ADD COLUMN IF NOT EXISTS invoice_id INT;
+
+-- ============ PAYMENT EXTENSIONS ============
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS service_appointment_id INT REFERENCES service_appointments(id) ON DELETE SET NULL;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS event_booking_id INT REFERENCES event_bookings(id) ON DELETE SET NULL;
+
+-- ============ FROSTY POPS / GELATERIA ============
+-- Reuses the existing restaurants / menu_items / orders tables. An outlet_type
+-- column flags the 4th outlet so management can report it separately.
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS outlet_type VARCHAR(30) DEFAULT 'RESTAURANT';
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS can_charge_room BOOLEAN DEFAULT TRUE;
+
+-- ============ HOUSEKEEPING ENHANCEMENTS ============
+ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'MEDIUM';
+ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS task_status VARCHAR(20) DEFAULT 'PENDING';
+ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS due_time TIMESTAMPTZ;
+ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS inspected_by INT REFERENCES users(id);
+ALTER TABLE housekeeping_tasks ADD COLUMN IF NOT EXISTS inspection_notes TEXT;
+
+-- ============ GUEST CRM EXTENSIONS ============
+ALTER TABLE guests ADD COLUMN IF NOT EXISTS vip_status VARCHAR(20) DEFAULT 'NORMAL';
+ALTER TABLE guests ADD COLUMN IF NOT EXISTS guest_type VARCHAR(30) DEFAULT 'INDIVIDUAL';
+ALTER TABLE guests ADD COLUMN IF NOT EXISTS country VARCHAR(80) DEFAULT 'Nigeria';
+ALTER TABLE guests ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+
+CREATE TABLE IF NOT EXISTS guest_preferences (
+  id SERIAL PRIMARY KEY,
+  guest_id INT REFERENCES guests(id) ON DELETE CASCADE,
+  room_preference TEXT,
+  bed_preference VARCHAR(50),
+  smoking_preference VARCHAR(30),
+  food_preferences TEXT,
+  special_requests TEXT,
+  other_notes TEXT,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_guest_prefs ON guest_preferences(guest_id);
+
+-- ============ MAINTENANCE ============
+CREATE TABLE IF NOT EXISTS maintenance_tickets (
+  id SERIAL PRIMARY KEY,
+  ticket_no VARCHAR(30) UNIQUE NOT NULL,
+  location VARCHAR(150) NOT NULL,
+  room_id INT REFERENCES rooms(id) ON DELETE SET NULL,
+  facility VARCHAR(80),
+  problem_category VARCHAR(60) NOT NULL,
+  description TEXT NOT NULL,
+  reported_by INT REFERENCES users(id),
+  assigned_to INT REFERENCES users(id),
+  priority VARCHAR(20) DEFAULT 'MEDIUM',
+  status VARCHAR(20) DEFAULT 'OPEN',
+  started_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  resolution_notes TEXT,
+  estimated_cost NUMERIC(12,2) DEFAULT 0,
+  actual_cost NUMERIC(12,2) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_maint_status ON maintenance_tickets(status);
+CREATE INDEX IF NOT EXISTS idx_maint_room ON maintenance_tickets(room_id);
+
+CREATE TABLE IF NOT EXISTS maintenance_parts (
+  id SERIAL PRIMARY KEY,
+  ticket_id INT REFERENCES maintenance_tickets(id) ON DELETE CASCADE,
+  inventory_item_id INT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  item_name VARCHAR(150),
+  quantity NUMERIC(12,2) DEFAULT 1,
+  issued BOOLEAN DEFAULT FALSE,
+  issued_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_maint_parts_ticket ON maintenance_parts(ticket_id);
+
+-- ============ CASHIER SHIFTS ============
+CREATE TABLE IF NOT EXISTS cashier_shifts (
+  id SERIAL PRIMARY KEY,
+  shift_no VARCHAR(30) UNIQUE NOT NULL,
+  staff_user_id INT REFERENCES users(id),
+  opening_cash NUMERIC(12,2) DEFAULT 0,
+  closing_cash NUMERIC(12,2),
+  expected_cash NUMERIC(12,2),
+  difference NUMERIC(12,2),
+  cash_total NUMERIC(12,2) DEFAULT 0,
+  pos_total NUMERIC(12,2) DEFAULT 0,
+  transfer_total NUMERIC(12,2) DEFAULT 0,
+  card_total NUMERIC(12,2) DEFAULT 0,
+  refund_total NUMERIC(12,2) DEFAULT 0,
+  total_transactions INT DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'OPEN',
+  opened_at TIMESTAMPTZ DEFAULT now(),
+  closed_at TIMESTAMPTZ,
+  notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_shifts_status ON cashier_shifts(status);
+CREATE INDEX IF NOT EXISTS idx_shifts_staff ON cashier_shifts(staff_user_id);
+
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS shift_id INT REFERENCES cashier_shifts(id) ON DELETE SET NULL;
+
+-- ============ PURCHASE REQUESTS ============
+CREATE TABLE IF NOT EXISTS purchase_requests (
+  id SERIAL PRIMARY KEY,
+  request_no VARCHAR(30) UNIQUE NOT NULL,
+  requested_by INT REFERENCES users(id),
+  department VARCHAR(50),
+  reason TEXT,
+  status VARCHAR(20) DEFAULT 'PENDING',
+  approved_by INT REFERENCES users(id),
+  approved_at TIMESTAMPTZ,
+  purchase_id INT REFERENCES purchases(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_preq_status ON purchase_requests(status);
+
+CREATE TABLE IF NOT EXISTS purchase_request_items (
+  id SERIAL PRIMARY KEY,
+  request_id INT REFERENCES purchase_requests(id) ON DELETE CASCADE,
+  inventory_item_id INT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  item_name VARCHAR(150),
+  quantity NUMERIC(12,2) DEFAULT 0,
+  unit_price NUMERIC(12,2) DEFAULT 0,
+  notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_preq_items ON purchase_request_items(request_id);
+
+-- ============ NOTIFICATIONS ============
+CREATE TABLE IF NOT EXISTS notifications (
+  id SERIAL PRIMARY KEY,
+  user_id INT REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(200) NOT NULL,
+  message TEXT,
+  category VARCHAR(50),
+  entity_type VARCHAR(50),
+  entity_id INT,
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, is_read);
+
+-- ============ RESERVATION EXTENSIONS ============
+ALTER TABLE reservations ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+
+-- ============ AUDIT LOG EXTENSIONS ============
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS old_value JSONB;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS new_value JSONB;
+
+-- ============ ADDITIONAL INDEXES ============
+CREATE INDEX IF NOT EXISTS idx_payments_category ON payments(category);
+CREATE INDEX IF NOT EXISTS idx_payments_shift ON payments(shift_id);
+CREATE INDEX IF NOT EXISTS idx_orders_guest ON orders(guest_id);
+CREATE INDEX IF NOT EXISTS idx_service_appt_status ON service_appointments(status);
+CREATE INDEX IF NOT EXISTS idx_maint_parts_item ON maintenance_parts(inventory_item_id);
+
+-- ============ PROCUREMENT WORKFLOW EXTENSIONS ============
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'PENDING';
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS expected_delivery TIMESTAMPTZ;
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS received_date TIMESTAMPTZ;
+ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS quantity_received NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS damaged_quantity NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS accepted_quantity NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS received_date TIMESTAMPTZ;
+ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS notes TEXT;
 `;
 
 export async function initDb() {
   await pool.query(schema);
+  await syncPermissionCatalog();
   console.log('Database schema is ready.');
 }
 
