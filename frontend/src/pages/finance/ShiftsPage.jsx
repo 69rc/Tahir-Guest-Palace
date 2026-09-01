@@ -103,9 +103,7 @@ export default function ShiftsPage() {
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Cashier</p>
           <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Shifts</h1>
-          <p className="text-sm text-ink-500 mt-1 max-w-2xl">
-            Start of day: count cash in the drawer and open a shift. Money collected on Sell, check-in, spa, and payments attaches to that open shift. End of day: count the cash again and close. The app compares what should be in the drawer (opening cash + cash taken − refunds) with what you counted.
-          </p>
+          <p className="text-sm text-ink-500 mt-1">Count the drawer to open. Count again to close.</p>
         </div>
         <Button onClick={() => setOpen(true)}><LogIn size={16} /> Open drawer</Button>
       </div>
@@ -136,7 +134,7 @@ export default function ShiftsPage() {
         </Card>
       ) : (
         <Card className="p-5">
-          <p className="text-sm text-ink-600">No drawer is open. Money can still be collected, but it will not sit against a cashier until you open one.</p>
+          <p className="text-sm text-ink-600">No drawer is open.</p>
           <Button size="sm" className="mt-3" variant="secondary" onClick={() => setOpen(true)}><LogIn size={14} /> Open one now</Button>
         </Card>
       )}
@@ -165,9 +163,9 @@ export default function ShiftsPage() {
       )}
 
       <div className="flex flex-wrap gap-2">
-        <FilterChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} label="All" count={shifts.length} />
-        <FilterChip active={statusFilter === 'OPEN'} onClick={() => setStatusFilter('OPEN')} label="Open" count={shifts.filter((s) => s.status === 'OPEN').length} />
-        <FilterChip active={statusFilter === 'CLOSED'} onClick={() => setStatusFilter('CLOSED')} label="Closed" count={shifts.filter((s) => s.status !== 'OPEN').length} />
+        <FilterChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} label="All" />
+        <FilterChip active={statusFilter === 'OPEN'} onClick={() => setStatusFilter('OPEN')} label="Open" />
+        <FilterChip active={statusFilter === 'CLOSED'} onClick={() => setStatusFilter('CLOSED')} label="Closed" />
       </div>
 
       <Card>

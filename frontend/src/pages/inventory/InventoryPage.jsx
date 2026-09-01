@@ -44,7 +44,6 @@ export default function InventoryPage() {
     const q = search.toLowerCase();
     return (i.name || '').toLowerCase().includes(q) || (i.category_name || '').toLowerCase().includes(q);
   });
-  const lowCount = items.filter(isLow).length;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -110,7 +109,7 @@ export default function InventoryPage() {
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Inventory</p>
           <h1 className="text-2xl font-bold text-ink-900 mt-0.5">Products</h1>
-          <p className="text-sm text-ink-500 mt-1">What the kitchen and store have. Stock drops when you sell.</p>
+          <p className="text-sm text-ink-500 mt-1">Kitchen and store stock.</p>
         </div>
         <Button onClick={() => setOpen(true)}><Plus size={16} /> Add item</Button>
       </div>
@@ -118,9 +117,9 @@ export default function InventoryPage() {
       <div className="space-y-3">
         <SearchInput value={search} onChange={setSearch} placeholder="Search products…" />
         <div className="flex flex-wrap gap-2">
-          <FilterChip active={stockFilter === 'all'} onClick={() => setStockFilter('all')} label="All" count={items.length} />
-          <FilterChip active={stockFilter === 'ok'} onClick={() => setStockFilter('ok')} label="Enough" count={items.length - lowCount} />
-          <FilterChip active={stockFilter === 'low'} onClick={() => setStockFilter('low')} label="Needs restock" count={lowCount} />
+          <FilterChip active={stockFilter === 'all'} onClick={() => setStockFilter('all')} label="All" />
+          <FilterChip active={stockFilter === 'ok'} onClick={() => setStockFilter('ok')} label="Enough" />
+          <FilterChip active={stockFilter === 'low'} onClick={() => setStockFilter('low')} label="Needs restock" />
         </div>
         {categories.length > 0 && (
           <div className="flex flex-wrap gap-2">
